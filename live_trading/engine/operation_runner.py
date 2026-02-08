@@ -508,16 +508,16 @@ class OperationRunner:
                     logger.info(f"Data for {bar_size} already in database - populating buffers only")
                     df_with_indicators = df.copy()
                     # Add indicators from database to DataFrame
-                    # Note: indicators_map keys are Python datetime, df index is pandas Timestamp
-                    # Convert indicators_map to use pandas Timestamps for matching
-                    indicators_map_pd = {pd.Timestamp(k): v for k, v in indicators_map.items()}
-                    indicators_matched = 0
-                    for timestamp, row in df.iterrows():
-                        if timestamp in indicators_map_pd:
-                            for indicator_name, indicator_value in indicators_map_pd[timestamp].items():
-                                df_with_indicators.loc[timestamp, indicator_name] = indicator_value
-                            indicators_matched += 1
-                    logger.info(f"Matched indicators for {indicators_matched}/{len(df)} bars from database")
+                    # Convert indicators_map to a DataFrame and join (much faster than row-by-row)
+                    if indicators_map:
+                        indicators_map_pd = {pd.Timestamp(k): v for k, v in indicators_map.items()}
+                        indicators_df = pd.DataFrame.from_dict(indicators_map_pd, orient='index')
+                        # Join on index (timestamp) - only matching rows get indicator values
+                        indicators_matched = len(indicators_df.index.intersection(df_with_indicators.index))
+                        df_with_indicators = df_with_indicators.join(indicators_df, how='left')
+                        logger.info(f"Matched indicators for {indicators_matched}/{len(df)} bars from database")
+                    else:
+                        logger.info(f"No indicators to match for {bar_size}")
                 else:
                     # Data from broker - calculate indicators and store in database
                     df_with_indicators = df.copy()
@@ -615,12 +615,29 @@ class OperationRunner:
 
                 # Add to data manager buffer so strategy can use it immediately
                 # Use the DataFrame with indicators
-                for idx, (timestamp, row) in enumerate(df_with_indicators.iterrows()):
+                existing_bars = self.data_manager.data_buffers[str(self.operation_id)][bar_size]
+                existing_timestamps = {
+                    existing.get("timestamp") for existing in existing_bars
+                }
+
+                # Get indicator columns once (outside the loop)
+                indicator_cols = [col for col in df_with_indicators.columns
+                                 if col not in ['open', 'high', 'low', 'close', 'volume']]
+
+                duplicates_skipped = 0
+                bars_added = 0
+
+                for timestamp, row in df_with_indicators.iterrows():
                     # Convert timestamp to datetime if needed
                     if hasattr(timestamp, 'to_pydatetime'):
                         bar_timestamp = timestamp.to_pydatetime()
                     else:
                         bar_timestamp = pd.to_datetime(timestamp)
+
+                    # Fast duplicate check using set lookup
+                    if bar_timestamp in existing_timestamps:
+                        duplicates_skipped += 1
+                        continue
 
                     bar_data = {
                         "timestamp": bar_timestamp,
@@ -633,8 +650,6 @@ class OperationRunner:
 
                     # Add indicators to bar_data so they're available in get_dataframe
                     indicators_dict = {}
-                    indicator_cols = [col for col in df_with_indicators.columns
-                                     if col not in ['open', 'high', 'low', 'close', 'volume']]
                     for col in indicator_cols:
                         if col in row and pd.notna(row[col]):
                             value = row[col]
@@ -652,18 +667,11 @@ class OperationRunner:
                             bar_data[col] = indicators_dict[col]
 
                     bar_data["indicators"] = indicators_dict
+                    existing_bars.append(bar_data)
+                    existing_timestamps.add(bar_timestamp)
+                    bars_added += 1
 
-                    # Add to buffer (this will be used by strategy)
-                    # Check for duplicates before adding (prevent duplicate timestamps)
-                    existing_bars = self.data_manager.data_buffers[str(self.operation_id)][bar_size]
-                    is_duplicate = any(
-                        existing.get("timestamp") == bar_timestamp
-                        for existing in existing_bars
-                    )
-                    if not is_duplicate:
-                        existing_bars.append(bar_data)
-                    else:
-                        logger.debug(f"Skipped duplicate bar for {bar_size} at {bar_timestamp}")
+                logger.info(f"Buffer populated for {bar_size}: {bars_added} bars added, {duplicates_skipped} duplicates skipped")
 
             except Exception as e:
                 logger.error(f"Error processing historical data for {bar_size}: {e}", exc_info=True)

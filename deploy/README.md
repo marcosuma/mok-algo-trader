@@ -55,7 +55,7 @@ gcloud compute firewall-rules update allow-ssh-from-home --source-ranges=$NEW_IP
    ```bash
    # macOS
    brew install google-cloud-sdk
-   
+
    # Or download from https://cloud.google.com/sdk/docs/install
    ```
 3. **Authenticate gcloud**:
@@ -208,7 +208,7 @@ curl http://localhost:8000/api/health
 
 ## Cost Optimization
 
-- **Stop when not trading**: `gcloud compute instances stop trading-bot --zone=us-central1-a`
+- **Stop when not trading**: `gcloud compute instances stop trading-bot --zone=europe-west8-b`
 - **Use preemptible instance**: Add `--preemptible` flag (cheaper but may restart)
 - **Committed use discounts**: For long-term use
 
