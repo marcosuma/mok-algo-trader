@@ -1422,7 +1422,7 @@ class CTraderBroker(BaseBroker):
             return ""
 
         # Create order request
-        request = ProtoOACreateOrderReq()
+        request = ProtoOANewOrderReq()
         request.ctidTraderAccountId = self.account_id
         request.symbolId = symbol_id
 
