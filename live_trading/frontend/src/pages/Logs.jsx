@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { API_BASE } from '../api/client'
 
 const LOG_LEVELS = ['ALL', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
@@ -19,6 +19,21 @@ const LEVEL_BG_COLORS = {
   CRITICAL: 'rgba(220, 38, 38, 0.2)'
 }
 
+/**
+ * Custom hook that debounces a value by a given delay.
+ * Returns the debounced value which only updates after `delay` ms of inactivity.
+ */
+function useDebounce(value, delay) {
+  const [debouncedValue, setDebouncedValue] = useState(value)
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedValue(value), delay)
+    return () => clearTimeout(timer)
+  }, [value, delay])
+
+  return debouncedValue
+}
+
 export default function Logs() {
   const [logs, setLogs] = useState([])
   const [loading, setLoading] = useState(true)
@@ -28,7 +43,7 @@ export default function Logs() {
   const [logFiles, setLogFiles] = useState([])
   const [totalCount, setTotalCount] = useState(null)
 
-  // Filters
+  // Filters (raw input values - update immediately for responsive UI)
   const [levelFilter, setLevelFilter] = useState('ALL')
   const [loggerFilter, setLoggerFilter] = useState('')
   const [searchFilter, setSearchFilter] = useState('')
@@ -40,6 +55,13 @@ export default function Logs() {
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
 
+  // Selected log line (for "search around this log")
+  const [selectedLogIndex, setSelectedLogIndex] = useState(null)
+
+  // Debounce text inputs to avoid firing API calls on every keystroke
+  const debouncedSearch = useDebounce(searchFilter, 400)
+  const debouncedLogger = useDebounce(loggerFilter, 400)
+
   // UI state
   const [showFiles, setShowFiles] = useState(false)
   const logsEndRef = useRef(null)
@@ -50,33 +72,46 @@ export default function Logs() {
   const offsetRef = useRef(0)
   // Track if we're loading older logs (to prevent scroll jump)
   const isLoadingOlderRef = useRef(false)
-  const scrollPositionRef = useRef(0)
+
+  // AbortController ref to cancel stale requests
+  const abortControllerRef = useRef(null)
+
+  // Build query params from the current (debounced) filters
+  const buildParams = useCallback((offset = 0) => {
+    const params = new URLSearchParams()
+    if (levelFilter !== 'ALL') params.append('level', levelFilter)
+    if (debouncedLogger) params.append('logger_name', debouncedLogger)
+    if (debouncedSearch) params.append('search', debouncedSearch)
+    if (startDate) params.append('start_time', new Date(startDate).toISOString())
+    if (endDate) params.append('end_time', new Date(endDate).toISOString())
+    params.append('limit', limit.toString())
+    params.append('offset', offset.toString())
+    return params
+  }, [levelFilter, debouncedLogger, debouncedSearch, startDate, endDate, limit])
 
   const fetchLogs = useCallback(async (append = false) => {
+    // Cancel any in-flight request to prevent race conditions
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+
     try {
       if (append) {
         setLoadingMore(true)
         isLoadingOlderRef.current = true
-        // Save scroll position before loading more
-        if (logsContainerRef.current) {
-          scrollPositionRef.current = logsContainerRef.current.scrollTop
-        }
       } else {
         setLoading(true)
         offsetRef.current = 0
         isLoadingOlderRef.current = false
       }
 
-      const params = new URLSearchParams()
-      if (levelFilter !== 'ALL') params.append('level', levelFilter)
-      if (loggerFilter) params.append('logger_name', loggerFilter)
-      if (searchFilter) params.append('search', searchFilter)
-      if (startDate) params.append('start_time', new Date(startDate).toISOString())
-      if (endDate) params.append('end_time', new Date(endDate).toISOString())
-      params.append('limit', limit.toString())
-      params.append('offset', append ? offsetRef.current.toString() : '0')
+      const params = buildParams(append ? offsetRef.current : 0)
 
-      const response = await fetch(`${API_BASE}/api/logs?${params}`)
+      const response = await fetch(`${API_BASE}/api/logs?${params}`, {
+        signal: controller.signal
+      })
       if (!response.ok) throw new Error('Failed to fetch logs')
       const data = await response.json()
 
@@ -91,12 +126,11 @@ export default function Logs() {
         setLogs(prev => [...newLogs, ...prev])
         offsetRef.current += limit
 
-        // Restore scroll position after DOM updates (use setTimeout to ensure React has rendered)
+        // Restore scroll position after DOM updates
         setTimeout(() => {
           if (logsContainerRef.current) {
             const newScrollHeight = logsContainerRef.current.scrollHeight
             const heightDiff = newScrollHeight - oldScrollHeight
-            // Keep viewing the same content by adjusting scroll position
             logsContainerRef.current.scrollTop = oldScrollTop + heightDiff
           }
           isLoadingOlderRef.current = false
@@ -108,13 +142,15 @@ export default function Logs() {
 
       setError(null)
     } catch (err) {
+      // Ignore aborted requests - they're intentional
+      if (err.name === 'AbortError') return
       setError(err.message)
       isLoadingOlderRef.current = false
     } finally {
       setLoading(false)
       setLoadingMore(false)
     }
-  }, [levelFilter, loggerFilter, searchFilter, startDate, endDate, limit])
+  }, [buildParams, limit])
 
   const fetchStats = useCallback(async () => {
     try {
@@ -142,8 +178,8 @@ export default function Logs() {
     try {
       const params = new URLSearchParams()
       if (levelFilter !== 'ALL') params.append('level', levelFilter)
-      if (loggerFilter) params.append('logger_name', loggerFilter)
-      if (searchFilter) params.append('search', searchFilter)
+      if (debouncedLogger) params.append('logger_name', debouncedLogger)
+      if (debouncedSearch) params.append('search', debouncedSearch)
       if (startDate) params.append('start_time', new Date(startDate).toISOString())
       if (endDate) params.append('end_time', new Date(endDate).toISOString())
 
@@ -154,7 +190,7 @@ export default function Logs() {
     } catch (err) {
       console.error('Error fetching count:', err)
     }
-  }, [levelFilter, loggerFilter, searchFilter, startDate, endDate])
+  }, [levelFilter, debouncedLogger, debouncedSearch, startDate, endDate])
 
   // Initial load
   useEffect(() => {
@@ -162,22 +198,26 @@ export default function Logs() {
     fetchLogFiles()
   }, [fetchStats, fetchLogFiles])
 
-  // Refetch when filters change (including initial load)
+  // Refetch when filters change (uses debounced values so text inputs don't fire on every keystroke)
   useEffect(() => {
     fetchLogs()
     fetchTotalCount()
   }, [fetchLogs, fetchTotalCount])
 
-  // Auto-refresh
+  // Auto-refresh (pauses automatically when any filters are active)
+  const hasActiveFilters = useMemo(() => {
+    return levelFilter !== 'ALL' || debouncedSearch || debouncedLogger || startDate || endDate
+  }, [levelFilter, debouncedSearch, debouncedLogger, startDate, endDate])
+
   useEffect(() => {
-    if (!autoRefresh) return
+    if (!autoRefresh || hasActiveFilters) return
 
     const interval = setInterval(() => {
       fetchLogs()
     }, refreshInterval * 1000)
 
     return () => clearInterval(interval)
-  }, [autoRefresh, refreshInterval, fetchLogs])
+  }, [autoRefresh, hasActiveFilters, refreshInterval, fetchLogs])
 
   // Auto-scroll to bottom when new logs arrive (but not when loading older logs)
   useEffect(() => {
@@ -186,18 +226,21 @@ export default function Logs() {
     }
   }, [logs, autoScroll])
 
+  // Cleanup abort controller on unmount
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort()
+      }
+    }
+  }, [])
+
   const formatTimestamp = (timestamp) => {
     try {
       const date = new Date(timestamp)
       return date.toLocaleString()
     } catch {
       return timestamp
-    }
-  }
-
-  const handleKeyDown = (e) => {
-    if (e.key === 'Enter') {
-      fetchLogs()
     }
   }
 
@@ -218,6 +261,43 @@ export default function Logs() {
     setEndDate(end.toISOString().split('T')[0])
   }
 
+  const clearAllFilters = () => {
+    setLevelFilter('ALL')
+    setLoggerFilter('')
+    setSearchFilter('')
+    setSelectedLogIndex(null)
+    clearDateFilters()
+  }
+
+  /**
+   * "Search around this log" - clears all filters and sets a +/- 2 minute
+   * time window around the selected log entry so you can see full context.
+   */
+  const searchAroundLog = (log) => {
+    const logTime = new Date(log.timestamp)
+
+    // Create a window: 2 minutes before and 2 minutes after
+    const windowMs = 2 * 60 * 1000
+    const start = new Date(logTime.getTime() - windowMs)
+    const end = new Date(logTime.getTime() + windowMs)
+
+    // Clear all other filters
+    setLevelFilter('ALL')
+    setLoggerFilter('')
+    setSearchFilter('')
+
+    // Set date range to the window around this log
+    // Format for datetime-local input: YYYY-MM-DDTHH:MM
+    const toLocalInput = (d) => {
+      const pad = (n) => String(n).padStart(2, '0')
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+    }
+    setStartDate(toLocalInput(start))
+    setEndDate(toLocalInput(end))
+    setSelectedLogIndex(null)
+    setAutoScroll(false)
+  }
+
   return (
     <div style={{
       padding: '20px',
@@ -232,8 +312,8 @@ export default function Logs() {
         alignItems: 'center',
         gap: '10px'
       }}>
-        📋 Application Logs
-        {autoRefresh && (
+        Application Logs
+        {autoRefresh && !hasActiveFilters && (
           <span style={{
             fontSize: '12px',
             backgroundColor: '#22c55e',
@@ -245,13 +325,24 @@ export default function Logs() {
             LIVE
           </span>
         )}
+        {autoRefresh && hasActiveFilters && (
+          <span style={{
+            fontSize: '12px',
+            backgroundColor: '#f59e0b',
+            color: '#000',
+            padding: '2px 8px',
+            borderRadius: '4px'
+          }}>
+            AUTO-REFRESH PAUSED (filters active)
+          </span>
+        )}
         {totalCount !== null && (
           <span style={{
             fontSize: '14px',
             color: '#888',
             fontWeight: 'normal'
           }}>
-            ({totalCount.toLocaleString()} total logs)
+            ({totalCount.toLocaleString()} matching logs)
           </span>
         )}
       </h1>
@@ -306,7 +397,7 @@ export default function Logs() {
               fontSize: '12px'
             }}
           >
-            📁 {showFiles ? 'Hide' : 'Show'} Files
+            {showFiles ? 'Hide' : 'Show'} Files
           </button>
         </div>
       )}
@@ -322,10 +413,10 @@ export default function Logs() {
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
             <h3 style={{ color: '#fff', margin: 0, fontSize: '14px' }}>
-              📁 Log Files Storage
+              Log Files Storage
             </h3>
             <span style={{ color: '#666', fontSize: '11px' }}>
-              ℹ️ All files are searched automatically
+              All files are searched automatically
             </span>
           </div>
           <div style={{
@@ -364,9 +455,6 @@ export default function Logs() {
                   }}>
                     ACTIVE
                   </span>
-                )}
-                {file.compressed && (
-                  <span style={{ fontSize: '10px' }}>📦</span>
                 )}
               </div>
             ))}
@@ -412,7 +500,6 @@ export default function Logs() {
             type="text"
             value={loggerFilter}
             onChange={(e) => setLoggerFilter(e.target.value)}
-            onKeyDown={handleKeyDown}
             placeholder="Filter by logger name..."
             style={{
               padding: '8px 12px',
@@ -425,7 +512,7 @@ export default function Logs() {
           />
         </div>
 
-        <div>
+        <div style={{ position: 'relative' }}>
           <label style={{ color: '#888', fontSize: '12px', display: 'block', marginBottom: '4px' }}>
             Search
           </label>
@@ -433,7 +520,6 @@ export default function Logs() {
             type="text"
             value={searchFilter}
             onChange={(e) => setSearchFilter(e.target.value)}
-            onKeyDown={handleKeyDown}
             placeholder="Search in messages..."
             style={{
               padding: '8px 12px',
@@ -441,9 +527,29 @@ export default function Logs() {
               border: '1px solid #333',
               backgroundColor: '#1a1a2e',
               color: '#fff',
-              width: '200px'
+              width: '200px',
+              paddingRight: searchFilter ? '30px' : '12px'
             }}
           />
+          {searchFilter && (
+            <button
+              onClick={() => setSearchFilter('')}
+              style={{
+                position: 'absolute',
+                right: '6px',
+                top: '26px',
+                background: 'none',
+                border: 'none',
+                color: '#6b7280',
+                cursor: 'pointer',
+                fontSize: '14px',
+                padding: '4px'
+              }}
+              title="Clear search"
+            >
+              x
+            </button>
+          )}
         </div>
 
         <div>
@@ -591,7 +697,7 @@ export default function Logs() {
               opacity: loading ? 0.5 : 1
             }}
           >
-            {loading ? 'Loading...' : '🔄 Refresh'}
+            {loading ? 'Loading...' : 'Refresh'}
           </button>
 
           <button
@@ -605,7 +711,7 @@ export default function Logs() {
               cursor: 'pointer'
             }}
           >
-            {autoRefresh ? '⏸️ Pause' : '▶️ Auto'}
+            {autoRefresh ? 'Pause' : 'Auto'}
           </button>
 
           <button
@@ -619,10 +725,72 @@ export default function Logs() {
               cursor: 'pointer'
             }}
           >
-            {autoScroll ? '📌 Pinned' : '📌 Pin'}
+            {autoScroll ? 'Pinned' : 'Pin'}
           </button>
         </div>
       </div>
+
+      {/* Active Filters Summary */}
+      {hasActiveFilters && (
+        <div style={{
+          display: 'flex',
+          gap: '8px',
+          marginBottom: '15px',
+          flexWrap: 'wrap',
+          alignItems: 'center'
+        }}>
+          <span style={{ color: '#888', fontSize: '12px' }}>Active filters:</span>
+          {levelFilter !== 'ALL' && (
+            <FilterTag
+              label={`Level: ${levelFilter}`}
+              color={LEVEL_COLORS[levelFilter]}
+              onRemove={() => setLevelFilter('ALL')}
+            />
+          )}
+          {debouncedSearch && (
+            <FilterTag
+              label={`Search: "${debouncedSearch}"`}
+              color="#3b82f6"
+              onRemove={() => setSearchFilter('')}
+            />
+          )}
+          {debouncedLogger && (
+            <FilterTag
+              label={`Logger: ${debouncedLogger}`}
+              color="#8b5cf6"
+              onRemove={() => setLoggerFilter('')}
+            />
+          )}
+          {startDate && (
+            <FilterTag
+              label={`From: ${startDate}`}
+              color="#6b7280"
+              onRemove={() => setStartDate('')}
+            />
+          )}
+          {endDate && (
+            <FilterTag
+              label={`To: ${endDate}`}
+              color="#6b7280"
+              onRemove={() => setEndDate('')}
+            />
+          )}
+          <button
+            onClick={clearAllFilters}
+            style={{
+              padding: '2px 8px',
+              borderRadius: '4px',
+              border: '1px solid #6b7280',
+              backgroundColor: 'transparent',
+              color: '#9ca3af',
+              cursor: 'pointer',
+              fontSize: '11px'
+            }}
+          >
+            Clear all
+          </button>
+        </div>
+      )}
 
       {/* Error */}
       {error && (
@@ -657,7 +825,7 @@ export default function Logs() {
               opacity: loadingMore ? 0.5 : 1
             }}
           >
-            {loadingMore ? 'Loading...' : `⬆️ Load ${limit} older logs (${logs.length.toLocaleString()} / ${totalCount.toLocaleString()})`}
+            {loadingMore ? 'Loading...' : `Load ${limit} older logs (${logs.length.toLocaleString()} / ${totalCount.toLocaleString()})`}
           </button>
         </div>
       )}
@@ -684,7 +852,7 @@ export default function Logs() {
             )}
           </span>
           <span style={{ color: '#888', fontSize: '12px' }}>
-            {autoRefresh && `Refreshing every ${refreshInterval}s`}
+            {autoRefresh && !hasActiveFilters && `Refreshing every ${refreshInterval}s`}
           </span>
         </div>
 
@@ -703,49 +871,79 @@ export default function Logs() {
             </div>
           )}
 
-          {logs.map((log, index) => (
-            <div
-              key={`${log.timestamp}-${index}`}
-              style={{
-                padding: '8px 15px',
-                borderBottom: '1px solid #222',
-                backgroundColor: LEVEL_BG_COLORS[log.level] || 'transparent',
-                display: 'grid',
-                gridTemplateColumns: '160px 80px 200px 1fr',
-                gap: '15px',
-                alignItems: 'start'
-              }}
-            >
-              <span style={{ color: '#888' }}>
-                {formatTimestamp(log.timestamp)}
-              </span>
-              <span style={{
-                color: LEVEL_COLORS[log.level] || '#888',
-                fontWeight: 'bold'
-              }}>
-                {log.level}
-              </span>
-              <span style={{
-                color: '#8b5cf6',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap'
-              }}>
-                {log.logger}
-              </span>
-              <span style={{
-                color: '#e0e0e0',
-                wordBreak: 'break-word'
-              }}>
-                {log.message}
-                {log.extra && Object.keys(log.extra).length > 0 && (
-                  <span style={{ color: '#666', marginLeft: '10px' }}>
-                    {JSON.stringify(log.extra)}
-                  </span>
-                )}
-              </span>
-            </div>
-          ))}
+          {logs.map((log, index) => {
+            const isSelected = selectedLogIndex === index
+            return (
+              <div
+                key={`${log.timestamp}-${index}`}
+                onClick={() => setSelectedLogIndex(isSelected ? null : index)}
+                style={{
+                  padding: '8px 15px',
+                  borderBottom: '1px solid #222',
+                  backgroundColor: isSelected
+                    ? 'rgba(59, 130, 246, 0.15)'
+                    : (LEVEL_BG_COLORS[log.level] || 'transparent'),
+                  display: 'grid',
+                  gridTemplateColumns: '160px 80px 200px 1fr',
+                  gap: '15px',
+                  alignItems: 'start',
+                  cursor: 'pointer',
+                  borderLeft: isSelected ? '3px solid #3b82f6' : '3px solid transparent',
+                  transition: 'background-color 0.1s'
+                }}
+              >
+                <span style={{ color: '#888' }}>
+                  {formatTimestamp(log.timestamp)}
+                </span>
+                <span style={{
+                  color: LEVEL_COLORS[log.level] || '#888',
+                  fontWeight: 'bold'
+                }}>
+                  {log.level}
+                </span>
+                <span style={{
+                  color: '#8b5cf6',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap'
+                }}>
+                  {log.logger}
+                </span>
+                <span style={{
+                  color: '#e0e0e0',
+                  wordBreak: 'break-word'
+                }}>
+                  {debouncedSearch ? highlightText(log.message, debouncedSearch) : log.message}
+                  {log.extra && Object.keys(log.extra).length > 0 && (
+                    <span style={{ color: '#666', marginLeft: '10px' }}>
+                      {JSON.stringify(log.extra)}
+                    </span>
+                  )}
+                  {isSelected && (
+                    <div style={{ marginTop: '6px' }}>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          searchAroundLog(log)
+                        }}
+                        style={{
+                          padding: '4px 10px',
+                          borderRadius: '4px',
+                          border: '1px solid #3b82f6',
+                          backgroundColor: 'rgba(59, 130, 246, 0.2)',
+                          color: '#60a5fa',
+                          cursor: 'pointer',
+                          fontSize: '11px'
+                        }}
+                      >
+                        Search around this log (+/- 2 min)
+                      </button>
+                    </div>
+                  )}
+                </span>
+              </div>
+            )
+          })}
           <div ref={logsEndRef} />
         </div>
       </div>
@@ -758,87 +956,72 @@ export default function Logs() {
         flexWrap: 'wrap'
       }}>
         <button
-          onClick={async () => {
-            setLevelFilter('ERROR')
-          }}
+          onClick={() => setLevelFilter('ERROR')}
           style={{
             padding: '8px 16px',
             borderRadius: '4px',
             border: '1px solid #ef4444',
-            backgroundColor: 'transparent',
+            backgroundColor: levelFilter === 'ERROR' ? 'rgba(239, 68, 68, 0.2)' : 'transparent',
             color: '#ef4444',
             cursor: 'pointer'
           }}
         >
-          🔴 Show Errors Only
+          Show Errors Only
         </button>
         <button
-          onClick={async () => {
-            setLevelFilter('WARNING')
-          }}
+          onClick={() => setLevelFilter('WARNING')}
           style={{
             padding: '8px 16px',
             borderRadius: '4px',
             border: '1px solid #f59e0b',
-            backgroundColor: 'transparent',
+            backgroundColor: levelFilter === 'WARNING' ? 'rgba(245, 158, 11, 0.2)' : 'transparent',
             color: '#f59e0b',
             cursor: 'pointer'
           }}
         >
-          🟡 Show Warnings
+          Show Warnings
         </button>
         <button
-          onClick={() => {
-            setLoggerFilter('live_trading.brokers')
-          }}
+          onClick={() => setLoggerFilter('live_trading.brokers')}
           style={{
             padding: '8px 16px',
             borderRadius: '4px',
             border: '1px solid #3b82f6',
-            backgroundColor: 'transparent',
+            backgroundColor: loggerFilter === 'live_trading.brokers' ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
             color: '#3b82f6',
             cursor: 'pointer'
           }}
         >
-          🔌 Broker Logs
+          Broker Logs
         </button>
         <button
-          onClick={() => {
-            setSearchFilter('[CONNECTION]')
-          }}
+          onClick={() => setSearchFilter('[CONNECTION]')}
           style={{
             padding: '8px 16px',
             borderRadius: '4px',
             border: '1px solid #22c55e',
-            backgroundColor: 'transparent',
+            backgroundColor: searchFilter === '[CONNECTION]' ? 'rgba(34, 197, 94, 0.2)' : 'transparent',
             color: '#22c55e',
             cursor: 'pointer'
           }}
         >
-          📡 Connection Logs
+          Connection Logs
         </button>
         <button
-          onClick={() => {
-            setSearchFilter('[ORDER]')
-          }}
+          onClick={() => setSearchFilter('[ORDER]')}
           style={{
             padding: '8px 16px',
             borderRadius: '4px',
             border: '1px solid #8b5cf6',
-            backgroundColor: 'transparent',
+            backgroundColor: searchFilter === '[ORDER]' ? 'rgba(139, 92, 246, 0.2)' : 'transparent',
             color: '#8b5cf6',
             cursor: 'pointer'
           }}
         >
-          📋 Order Logs
+          Order Logs
         </button>
         <button
-          onClick={() => {
-            setLevelFilter('ALL')
-            setLoggerFilter('')
-            setSearchFilter('')
-            clearDateFilters()
-          }}
+          onClick={clearAllFilters}
           style={{
             padding: '8px 16px',
             borderRadius: '4px',
@@ -848,7 +1031,7 @@ export default function Logs() {
             cursor: 'pointer'
           }}
         >
-          🔄 Clear All Filters
+          Clear All Filters
         </button>
       </div>
 
@@ -860,4 +1043,69 @@ export default function Logs() {
       `}</style>
     </div>
   )
+}
+
+/**
+ * Small removable tag component for showing active filters.
+ */
+function FilterTag({ label, color, onRemove }) {
+  return (
+    <span style={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '4px',
+      padding: '2px 8px',
+      borderRadius: '4px',
+      border: `1px solid ${color}`,
+      color: color,
+      fontSize: '11px',
+      backgroundColor: `${color}20`
+    }}>
+      {label}
+      <button
+        onClick={onRemove}
+        style={{
+          background: 'none',
+          border: 'none',
+          color: color,
+          cursor: 'pointer',
+          fontSize: '12px',
+          padding: '0 2px',
+          lineHeight: 1
+        }}
+      >
+        x
+      </button>
+    </span>
+  )
+}
+
+/**
+ * Highlight matching text in log messages.
+ */
+function highlightText(text, search) {
+  if (!search) return text
+
+  const parts = text.split(new RegExp(`(${escapeRegex(search)})`, 'gi'))
+  return parts.map((part, i) =>
+    part.toLowerCase() === search.toLowerCase() ? (
+      <mark key={i} style={{
+        backgroundColor: 'rgba(250, 204, 21, 0.3)',
+        color: '#fbbf24',
+        borderRadius: '2px',
+        padding: '0 1px'
+      }}>
+        {part}
+      </mark>
+    ) : (
+      part
+    )
+  )
+}
+
+/**
+ * Escape special regex characters in a string.
+ */
+function escapeRegex(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }

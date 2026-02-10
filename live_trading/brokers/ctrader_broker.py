@@ -86,6 +86,7 @@ class CTraderBroker(BaseBroker):
         self._symbol_id_to_name: Dict[int, str] = {}  # symbol_id -> asset (reverse lookup)
         self._symbol_digits: Dict[int, int] = {}  # symbol_id -> digits (decimal places)
         self._order_callbacks: Dict[str, Callable] = {}  # order_id -> callback
+        self._pending_order_futures: Dict[str, Any] = {}  # clientMsgId -> (asyncio.Future, loop, order_status_callback)
         self._reactor_thread: Optional[threading.Thread] = None
         self._pending_requests: Dict[int, Deferred] = {}  # request_id -> deferred
         self._request_id_counter = 0
@@ -527,6 +528,16 @@ class CTraderBroker(BaseBroker):
                 description = getattr(extracted, 'description', 'No description')
                 logger.error(f"[Reactor Thread] ✗ cTrader API Error: {error_code} - {description}")
                 self._auth_error = f"API Error: {error_code} - {description}"
+                # Resolve any pending order futures on generic API error
+                resolved_key = None
+                for key, (future, loop, _) in self._pending_order_futures.items():
+                    if not future.done():
+                        logger.error(f"[ORDER] Resolving pending order future as FAILED (API Error): {error_code}")
+                        loop.call_soon_threadsafe(future.set_result, "")
+                        resolved_key = key
+                        break
+                if resolved_key:
+                    del self._pending_order_futures[resolved_key]
             elif message_type == "ProtoHeartbeatEvent":
                 # Heartbeat - log at debug level for monitoring
                 logger.debug("[Reactor Thread] Heartbeat received - connection is alive")
@@ -595,36 +606,54 @@ class CTraderBroker(BaseBroker):
             logger.error(f"Error handling spot event: {e}", exc_info=True)
 
     def _handle_execution_event(self, event):  # type: ignore
-        """Handle order execution events"""
+        """Handle order execution events (runs on reactor thread)"""
         try:
             order = event.order
             order_id = str(order.orderId)
+            execution_type = getattr(event, 'executionType', None)
 
+            logger.info(f"[ORDER] Execution event: order_id={order_id}, executionType={execution_type}, orderStatus={order.orderStatus}")
+
+            # Map cTrader order status to our format
+            status_map = {
+                ProtoOAOrderStatus.ORDER_STATUS_ACCEPTED: "ACCEPTED",
+                ProtoOAOrderStatus.ORDER_STATUS_FILLED: "FILLED",
+                ProtoOAOrderStatus.ORDER_STATUS_REJECTED: "REJECTED",
+                ProtoOAOrderStatus.ORDER_STATUS_EXPIRED: "EXPIRED",
+                ProtoOAOrderStatus.ORDER_STATUS_CANCELLED: "CANCELLED",
+            }
+            status = status_map.get(order.orderStatus, "UNKNOWN")
+
+            # Convert execution price if present
+            symbol_id = getattr(order, 'tradeData', {}).symbolId if hasattr(order, 'tradeData') else None
+            if symbol_id is None:
+                symbol_id = getattr(order, 'symbolId', None)
+
+            avg_fill_price = None
+            last_fill_price = None
+            if hasattr(order, 'executionPrice') and order.executionPrice:
+                converted_price = self._convert_price(order.executionPrice, symbol_id) if symbol_id else order.executionPrice
+                avg_fill_price = converted_price
+                last_fill_price = converted_price
+
+            # Resolve any pending order future (from place_order)
+            # Check all pending futures - match by order_id from the execution event
+            resolved_key = None
+            for key, (future, loop, order_status_callback) in self._pending_order_futures.items():
+                if not future.done():
+                    logger.info(f"[ORDER] Resolving pending order future: order_id={order_id}")
+                    # Register the order status callback now that we have the order_id
+                    if order_status_callback:
+                        self._order_callbacks[order_id] = order_status_callback
+                    loop.call_soon_threadsafe(future.set_result, order_id)
+                    resolved_key = key
+                    break
+            if resolved_key:
+                del self._pending_order_futures[resolved_key]
+
+            # Fire existing order callbacks (for status updates on already-tracked orders)
             if order_id in self._order_callbacks:
                 callback = self._order_callbacks[order_id]
-
-                # Map cTrader order status to our format
-                status_map = {
-                    ProtoOAOrderStatus.ORDER_STATUS_ACCEPTED: "ACCEPTED",
-                    ProtoOAOrderStatus.ORDER_STATUS_FILLED: "FILLED",
-                    ProtoOAOrderStatus.ORDER_STATUS_REJECTED: "REJECTED",
-                    ProtoOAOrderStatus.ORDER_STATUS_EXPIRED: "EXPIRED",
-                    ProtoOAOrderStatus.ORDER_STATUS_CANCELLED: "CANCELLED",
-                }
-                status = status_map.get(order.orderStatus, "UNKNOWN")
-
-                # Convert execution price if present
-                symbol_id = getattr(order, 'tradeData', {}).symbolId if hasattr(order, 'tradeData') else None
-                if symbol_id is None:
-                    symbol_id = getattr(order, 'symbolId', None)
-
-                avg_fill_price = None
-                last_fill_price = None
-                if hasattr(order, 'executionPrice') and order.executionPrice:
-                    converted_price = self._convert_price(order.executionPrice, symbol_id) if symbol_id else order.executionPrice
-                    avg_fill_price = converted_price
-                    last_fill_price = converted_price
-
                 callback({
                     "order_id": order_id,
                     "status": status,
@@ -643,11 +672,22 @@ class CTraderBroker(BaseBroker):
         logger.debug(f"Subscribe spots response received for account: {response.ctidTraderAccountId}")
 
     def _handle_order_error(self, response):  # type: ignore
-        """Handle order error events"""
+        """Handle order error events (runs on reactor thread)"""
         error_code = getattr(response, 'errorCode', 'UNKNOWN')
         description = getattr(response, 'description', 'No description')
         order_id = getattr(response, 'orderId', None)
-        logger.error(f"Order error: {error_code} - {description} (orderId: {order_id})")
+        logger.error(f"[ORDER] Order error: {error_code} - {description} (orderId: {order_id})")
+
+        # Resolve any pending order future with empty string (signals failure)
+        resolved_key = None
+        for key, (future, loop, _) in self._pending_order_futures.items():
+            if not future.done():
+                logger.error(f"[ORDER] Resolving pending order future as FAILED: {error_code} - {description}")
+                loop.call_soon_threadsafe(future.set_result, "")
+                resolved_key = key
+                break
+        if resolved_key:
+            del self._pending_order_futures[resolved_key]
 
     def _handle_get_positions_res(self, response):  # type: ignore
         """Handle get positions response"""
@@ -1399,6 +1439,23 @@ class CTraderBroker(BaseBroker):
         """Register a callback for order status updates"""
         self._order_callbacks[broker_order_id] = callback
 
+    def _convert_quantity_to_volume(self, quantity: float, symbol_id: Optional[int] = None) -> int:
+        """
+        Convert a lot-based quantity to cTrader volume units.
+
+        cTrader uses volume in 'cents' (1 lot = 100,000 units).
+        Example: 0.01 lots = 1,000 volume units
+                 0.10 lots = 10,000 volume units
+                 1.00 lots = 100,000 volume units
+        """
+        UNITS_PER_LOT = 100_000
+        volume = int(round(quantity * UNITS_PER_LOT))
+        # Ensure minimum volume (0.01 lots = 1000 units)
+        if volume < 1000:
+            logger.warning(f"[ORDER] Volume {volume} too small (min 1000 = 0.01 lots), using minimum")
+            volume = 1000
+        return volume
+
     async def place_order(
         self,
         asset: str,
@@ -1410,15 +1467,21 @@ class CTraderBroker(BaseBroker):
         take_profit: Optional[float] = None,
         order_status_callback: Optional[Callable] = None  # Optional parameter, not in base class
     ) -> str:
-        """Place an order"""
+        """Place an order via cTrader Open API.
+
+        Note: cTrader does NOT return the order result through the Deferred from
+        client.send(). Instead, the result arrives as a ProtoOAExecutionEvent
+        through the general message handler. We track the pending future and
+        resolve it from _handle_execution_event.
+        """
         if not self.connected or not self.authenticated or not self.client:
-            logger.error("Not connected to cTrader")
+            logger.error("[ORDER] Not connected to cTrader")
             return ""
 
         # Get symbol ID
         symbol_id = await self._get_symbol_id(asset)
         if symbol_id is None:
-            logger.error(f"Could not find symbol ID for {asset}")
+            logger.error(f"[ORDER] Could not find symbol ID for {asset}")
             return ""
 
         # Create order request
@@ -1444,66 +1507,69 @@ class CTraderBroker(BaseBroker):
             if price:
                 request.stopPrice = price
         else:
-            logger.error(f"Unsupported order type: {order_type}")
+            logger.error(f"[ORDER] Unsupported order type: {order_type}")
             return ""
 
-        # Set volume
-        request.volume = quantity
+        # Convert quantity (lots) to cTrader volume units (1 lot = 100,000 units)
+        volume = self._convert_quantity_to_volume(quantity, symbol_id)
+        request.volume = volume
+        logger.info(f"[ORDER] Volume conversion: {quantity} lots -> {volume} volume units")
 
-        # Add stop loss and take profit
-        if stop_loss or take_profit:
-            request.stopLoss = stop_loss if stop_loss else 0
-            request.takeProfit = take_profit if take_profit else 0
+        # Add stop loss and take profit (cTrader expects actual price values)
+        if stop_loss:
+            request.stopLoss = stop_loss
+        if take_profit:
+            request.takeProfit = take_profit
 
         try:
             loop = asyncio.get_event_loop()
             future = loop.create_future()
 
-            def on_success(response):
-                try:
-                    extracted = Protobuf.extract(response)
-                    if hasattr(extracted, 'order') and extracted.order:
-                        order_id = str(extracted.order.orderId)
-                        logger.info(f"Placed {order_type} {action} order for {asset}: {quantity} (order_id: {order_id})")
+            # Register the pending future BEFORE sending the request
+            # so _handle_execution_event can resolve it when the response arrives
+            request_key = f"order_{id(future)}"
+            self._pending_order_futures[request_key] = (future, loop, order_status_callback)
+            logger.info(f"[ORDER] Registered pending order future: {request_key}")
 
-                        # Register callback if provided
-                        if order_status_callback:
-                            self.register_order_callback(order_id, order_status_callback)
+            def on_send_success(response):
+                """Called when the request message is acknowledged (NOT the order result)"""
+                logger.info(f"[ORDER] Request sent successfully, waiting for execution event...")
+                # The actual order result will come via ProtoOAExecutionEvent
+                # which is handled by _handle_execution_event
 
-                        if not future.done():
-                            loop.call_soon_threadsafe(future.set_result, order_id)
-                    else:
-                        logger.error(f"Order placement response has no order: {extracted}")
-                        if not future.done():
-                            loop.call_soon_threadsafe(future.set_result, "")
-                except Exception as e:
-                    logger.error(f"Error processing order response: {e}", exc_info=True)
-                    if not future.done():
-                        loop.call_soon_threadsafe(future.set_result, "")
-
-            def on_error(failure):
-                logger.error(f"Order placement failed: {failure}")
+            def on_send_error(failure):
+                """Called if sending the request itself fails"""
+                logger.error(f"[ORDER] Failed to send order request: {failure}")
+                # Clean up and resolve future
+                if request_key in self._pending_order_futures:
+                    del self._pending_order_futures[request_key]
                 if not future.done():
                     loop.call_soon_threadsafe(future.set_result, "")
 
             def send_request():
                 if self.client:
                     d = self.client.send(request)
-                    d.addCallbacks(on_success, on_error)
+                    d.addCallbacks(on_send_success, on_send_error)
                 else:
+                    if request_key in self._pending_order_futures:
+                        del self._pending_order_futures[request_key]
                     loop.call_soon_threadsafe(future.set_result, "")
 
             reactor.callFromThread(send_request)
 
-            # Wait for response with timeout
+            # Wait for the execution event to resolve the future (or timeout)
             try:
-                return await asyncio.wait_for(future, timeout=30.0)
+                result = await asyncio.wait_for(future, timeout=30.0)
+                return result
             except asyncio.TimeoutError:
-                logger.error(f"Timeout waiting for order placement response")
+                logger.error(f"[ORDER] Timeout (30s) waiting for order execution event for {action} {asset}")
+                # Clean up the pending future
+                if request_key in self._pending_order_futures:
+                    del self._pending_order_futures[request_key]
                 return ""
 
         except Exception as e:
-            logger.error(f"Error placing order: {e}", exc_info=True)
+            logger.error(f"[ORDER] Error placing order: {e}", exc_info=True)
             return ""
 
     async def cancel_order(self, broker_order_id: str) -> bool:
