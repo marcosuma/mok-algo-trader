@@ -79,12 +79,17 @@ class CallbackHandler(BaseHTTPRequestHandler):
         pass
 
 
-def get_authorization_url(client_id: str, redirect_uri: str) -> str:
-    """Generate the authorization URL"""
+def get_authorization_url(client_id: str, redirect_uri: str, scope: str = "trading") -> str:
+    """Generate the authorization URL.
+
+    Args:
+        scope: Permission scope to request. Use 'trading' for full trade access
+               or 'accounts' for view-only access.
+    """
     params = {
         'client_id': client_id,
         'redirect_uri': redirect_uri,
-        'scope': 'accounts',
+        'scope': scope,
         'product': 'web'
     }
     query_string = urllib.parse.urlencode(params)
@@ -176,6 +181,13 @@ Examples:
         default=8000,
         help='Port for the callback server (default: 8000)'
     )
+    parser.add_argument(
+        '--scope',
+        type=str,
+        default='trading',
+        choices=['trading', 'accounts'],
+        help='Permission scope: "trading" for full trade access (default), "accounts" for view-only'
+    )
 
     args = parser.parse_args()
 
@@ -197,15 +209,18 @@ Examples:
         print("  export CTRADER_CLIENT_SECRET='your_client_secret'")
         sys.exit(1)
 
+    scope = args.scope
+
     print("=" * 70)
     print("cTrader Open API - Access Token Generator")
     print("=" * 70)
     print(f"\nClient ID: {client_id[:10]}...{client_id[-4:] if len(client_id) > 14 else client_id}")
     print(f"Redirect URI: {redirect_uri}")
+    print(f"Scope: {scope} {'(TRADE permissions)' if scope == 'trading' else '(VIEW-ONLY - cannot place orders!)'}")
     print()
 
     # Generate authorization URL
-    auth_url = get_authorization_url(client_id, redirect_uri)
+    auth_url = get_authorization_url(client_id, redirect_uri, scope=scope)
 
     # Determine mode
     if args.manual:
@@ -288,9 +303,10 @@ Examples:
             sys.exit(1)
 
         print("\n" + "=" * 70)
-        print("SUCCESS! Access Token obtained")
+        print(f"SUCCESS! Access Token obtained (scope: {scope})")
         print("=" * 70)
-        print(f"\nAccess Token: {access_token}\n")
+        print(f"\nAccess Token: {access_token}")
+        print(f"Scope: {scope} {'- can place trades' if scope == 'trading' else '- VIEW ONLY, cannot trade!'}\n")
         print("Add this to your environment variables:")
         print(f"  export CTRADER_ACCESS_TOKEN='{access_token}'")
         print("\nOr add it to your .env file:")

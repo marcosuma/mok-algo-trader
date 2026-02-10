@@ -322,11 +322,20 @@ class CTraderBroker(BaseBroker):
 
         # Get account list - use ProtoOAGetAccountListByAccessTokenReq
         if self.client:
+            access_token = config.CTRADER_ACCESS_TOKEN
+            if not access_token:
+                error_msg = (
+                    "CTRADER_ACCESS_TOKEN is not set - cannot retrieve accounts. "
+                    "Generate one with 'trading' scope: python -m live_trading.scripts.get_ctrader_token"
+                )
+                logger.error(f"[Reactor Thread] ✗ {error_msg}")
+                self._auth_error = error_msg
+                return
+
             logger.info("[Reactor Thread] Requesting account list...")
             try:
-                # The correct message is ProtoOAGetAccountListByAccessTokenReq
                 request = ProtoOAGetAccountListByAccessTokenReq()
-                request.accessToken = config.CTRADER_ACCESS_TOKEN or ""
+                request.accessToken = access_token
                 deferred = self.client.send(request)
                 deferred.addCallbacks(self._on_account_list, self._on_auth_error)
             except Exception as e:
@@ -350,6 +359,19 @@ class CTraderBroker(BaseBroker):
             logger.error(f"[Reactor Thread] Failed to extract message: {e}")
             extracted = message
 
+        # Check permission scope - warn if view-only
+        permission_scope = getattr(extracted, 'permissionScope', None)
+        if permission_scope is not None:
+            # ProtoOAAccessRights: 0 = SCOPE_VIEW, 1 = SCOPE_TRADE
+            scope_name = "SCOPE_TRADE" if permission_scope == 1 else "SCOPE_VIEW"
+            logger.info(f"[Reactor Thread] Access token permission scope: {scope_name} ({permission_scope})")
+            if permission_scope == 0:
+                logger.warning(
+                    "[Reactor Thread] ⚠️ Access token has SCOPE_VIEW only - TRADING WILL NOT WORK! "
+                    "Regenerate your access token with 'trading' scope using: "
+                    "python -m live_trading.scripts.get_ctrader_token"
+                )
+
         # Check for ctidTraderAccount (correct field name for the response)
         accounts = getattr(extracted, 'ctidTraderAccount', None) or getattr(extracted, 'account', None)
 
@@ -372,8 +394,12 @@ class CTraderBroker(BaseBroker):
 
         # Authenticate account
         if self.client:
-            if not config.CTRADER_ACCESS_TOKEN:
-                error_msg = "CTRADER_ACCESS_TOKEN environment variable is not set"
+            access_token = config.CTRADER_ACCESS_TOKEN
+            if not access_token:
+                error_msg = (
+                    "CTRADER_ACCESS_TOKEN is not set. Generate one with 'trading' scope: "
+                    "python -m live_trading.scripts.get_ctrader_token"
+                )
                 logger.error(f"[Reactor Thread] ✗ {error_msg}")
                 self._auth_error = error_msg
                 return
@@ -382,7 +408,7 @@ class CTraderBroker(BaseBroker):
             try:
                 request = ProtoOAAccountAuthReq()
                 request.ctidTraderAccountId = self.account_id
-                request.accessToken = config.CTRADER_ACCESS_TOKEN
+                request.accessToken = access_token
                 deferred = self.client.send(request)
                 deferred.addCallbacks(self._on_account_auth_success, self._on_auth_error)
             except Exception as e:
@@ -823,14 +849,19 @@ class CTraderBroker(BaseBroker):
                 missing_vars.append("CTRADER_CLIENT_ID")
             if not config.CTRADER_CLIENT_SECRET:
                 missing_vars.append("CTRADER_CLIENT_SECRET")
-            if not config.CTRADER_ACCESS_TOKEN:
-                missing_vars.append("CTRADER_ACCESS_TOKEN")
 
             if missing_vars:
                 logger.error(f"✗ Missing required environment variables: {', '.join(missing_vars)}")
                 logger.error("  Please set these variables before starting the application.")
-                logger.error("  You can use the token generator script: python live_trading/scripts/get_ctrader_token.py")
                 return False
+
+            # Access token is optional at connect time but required for trading
+            if not config.CTRADER_ACCESS_TOKEN:
+                logger.warning(
+                    "⚠️ CTRADER_ACCESS_TOKEN is not set. App will authenticate but "
+                    "account access and trading will fail. Generate one with: "
+                    "python -m live_trading.scripts.get_ctrader_token"
+                )
 
             # Determine host (live or demo)
             environment = config.CTRADER_ENVIRONMENT.upper()
