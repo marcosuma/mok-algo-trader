@@ -523,16 +523,18 @@ class CTraderBroker(BaseBroker):
                 # Handled via deferred callback in fetch_historical_data
                 logger.debug(f"[Reactor Thread] Received trendbar response with {len(extracted.trendbar) if hasattr(extracted, 'trendbar') else 0} bars")
             elif message_type == "ProtoOAErrorRes":
-                # Handle error responses
+                # Handle error responses - dump all fields for debugging
                 error_code = getattr(extracted, 'errorCode', 'UNKNOWN')
                 description = getattr(extracted, 'description', 'No description')
+                # Log the full protobuf message for debugging
                 logger.error(f"[Reactor Thread] ✗ cTrader API Error: {error_code} - {description}")
+                logger.error(f"[Reactor Thread] Full error response: {extracted}")
                 self._auth_error = f"API Error: {error_code} - {description}"
                 # Resolve any pending order futures on generic API error
                 resolved_key = None
                 for key, (future, loop, _) in self._pending_order_futures.items():
                     if not future.done():
-                        logger.error(f"[ORDER] Resolving pending order future as FAILED (API Error): {error_code}")
+                        logger.error(f"[ORDER] Resolving pending order future as FAILED: {error_code} - {description}")
                         loop.call_soon_threadsafe(future.set_result, "")
                         resolved_key = key
                         break
@@ -1520,6 +1522,20 @@ class CTraderBroker(BaseBroker):
             request.stopLoss = stop_loss
         if take_profit:
             request.takeProfit = take_profit
+
+        # Log the full request details for debugging
+        logger.info(
+            f"[ORDER] Request details: "
+            f"accountId={self.account_id}, "
+            f"symbolId={symbol_id}, "
+            f"tradeSide={action}, "
+            f"orderType={order_type}, "
+            f"volume={volume} (from {quantity} lots), "
+            f"stopLoss={stop_loss}, "
+            f"takeProfit={take_profit}, "
+            f"price={price}"
+        )
+        logger.info(f"[ORDER] Full protobuf request: {request}")
 
         try:
             loop = asyncio.get_event_loop()
