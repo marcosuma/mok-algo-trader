@@ -24,7 +24,8 @@ class BaseBroker(ABC):
         self,
         asset: str,
         callback: Callable[[Dict[str, Any]], None],
-        callback_id: str = None
+        callback_id: str = None,
+        **kwargs
     ) -> bool:
         """
         Subscribe to real-time market data for an asset.

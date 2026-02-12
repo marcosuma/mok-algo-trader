@@ -132,15 +132,20 @@ class OperationRunner:
 
         # Get broker from data manager and subscribe
         # Use operation_id as callback_id to allow multiple operations on same asset
+        # Pass bar_sizes to enable live trendbar subscriptions (for volume data)
         if self.data_manager.broker:
             callback_id = f"op_{self.operation_id}"
-            subscribed = await self.data_manager.broker.subscribe_market_data(
-                asset=operation.asset,
-                callback=broker_tick_callback,
-                callback_id=callback_id
-            )
+            subscribe_kwargs = {
+                "asset": operation.asset,
+                "callback": broker_tick_callback,
+                "callback_id": callback_id,
+            }
+            # Pass bar_sizes if the broker supports it (cTrader uses them for live trendbar volume)
+            if hasattr(self.data_manager.broker, 'subscribe_live_trendbars'):
+                subscribe_kwargs["bar_sizes"] = operation.bar_sizes
+            subscribed = await self.data_manager.broker.subscribe_market_data(**subscribe_kwargs)
             if subscribed:
-                logger.info(f"Subscribed to market data for {operation.asset} (callback_id: {callback_id})")
+                logger.info(f"Subscribed to market data for {operation.asset} (callback_id: {callback_id}, bar_sizes: {operation.bar_sizes})")
             else:
                 logger.warning(f"Failed to subscribe to market data for {operation.asset}")
         else:

@@ -74,6 +74,24 @@ const PRICE_CHART_HEIGHT = 400
 const VOLUME_CHART_HEIGHT = 100
 const INDICATOR_CHART_HEIGHT = 120
 
+// Time range preset definitions
+const TIME_RANGE_PRESETS = [
+  { label: '1H', value: 60 * 60 * 1000, tooltip: 'Last 1 hour' },
+  { label: '4H', value: 4 * 60 * 60 * 1000, tooltip: 'Last 4 hours' },
+  { label: '24H', value: 24 * 60 * 60 * 1000, tooltip: 'Last 24 hours' },
+  { label: '7D', value: 7 * 24 * 60 * 60 * 1000, tooltip: 'Last 7 days' },
+  { label: '30D', value: 30 * 24 * 60 * 60 * 1000, tooltip: 'Last 30 days' },
+  { label: '90D', value: 90 * 24 * 60 * 60 * 1000, tooltip: 'Last 90 days' },
+  { label: 'All', value: null, tooltip: 'Show all data' },
+]
+
+// Helper to format a Date as a local datetime-local input value (YYYY-MM-DDTHH:mm)
+const toDateTimeLocalString = (date) => {
+  const d = new Date(date)
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
 function MarketDataChart({ data, selectedIndicators = [] }) {
   const [xAxisDomain, setXAxisDomain] = useState(['dataMin', 'dataMax'])
   const [chartType, setChartType] = useState('candlestick')
@@ -82,6 +100,10 @@ function MarketDataChart({ data, selectedIndicators = [] }) {
   const [selectionEnd, setSelectionEnd] = useState(null)
   const [hiddenSeries, setHiddenSeries] = useState(new Set())
   const [chartWidth, setChartWidth] = useState(800)
+  const [activePreset, setActivePreset] = useState('All')
+  const [customRangeOpen, setCustomRangeOpen] = useState(false)
+  const [customStartDate, setCustomStartDate] = useState('')
+  const [customEndDate, setCustomEndDate] = useState('')
   const containerRef = useRef(null)
   const previousDataRef = useRef(null)
 
@@ -96,6 +118,45 @@ function MarketDataChart({ data, selectedIndicators = [] }) {
     window.addEventListener('resize', updateWidth)
     return () => window.removeEventListener('resize', updateWidth)
   }, [])
+
+  // Handle time range preset selection
+  const handlePresetSelect = useCallback((preset) => {
+    setActivePreset(preset.label)
+    setCustomRangeOpen(false)
+
+    if (preset.value === null) {
+      // "All" - show everything
+      setXAxisDomain(['dataMin', 'dataMax'])
+      return
+    }
+
+    // Calculate the end timestamp from the latest data point
+    if (!data || data.length === 0) return
+    const latestTimestamp = Math.max(...data.map(d => new Date(d.timestamp).getTime()))
+    const startTimestamp = latestTimestamp - preset.value
+    setXAxisDomain([startTimestamp, latestTimestamp])
+  }, [data])
+
+  // Handle custom date range application
+  const handleCustomRangeApply = useCallback(() => {
+    if (!customStartDate && !customEndDate) return
+
+    const startTs = customStartDate ? new Date(customStartDate).getTime() : 'dataMin'
+    const endTs = customEndDate ? new Date(customEndDate).getTime() : 'dataMax'
+
+    setActivePreset('custom')
+    setXAxisDomain([startTs, endTs])
+  }, [customStartDate, customEndDate])
+
+  // Initialize custom date range inputs from data bounds
+  const dataTimeBounds = useMemo(() => {
+    if (!data || data.length === 0) return null
+    const timestamps = data.map(d => new Date(d.timestamp).getTime())
+    return {
+      min: Math.min(...timestamps),
+      max: Math.max(...timestamps),
+    }
+  }, [data])
 
   // Dynamic max points based on chart width
   const getMaxPoints = (width) => {
@@ -322,6 +383,7 @@ function MarketDataChart({ data, selectedIndicators = [] }) {
   // Event handlers
   const handleResetZoom = () => {
     setXAxisDomain(['dataMin', 'dataMax'])
+    setActivePreset('All')
     setIsSelecting(false)
     setSelectionStart(null)
     setSelectionEnd(null)
@@ -373,6 +435,7 @@ function MarketDataChart({ data, selectedIndicators = [] }) {
       // Only zoom if selection is meaningful (at least 1% of current range or at least 2 points)
       if (selectionRange > Math.max(currentRange * 0.01, 1)) {
         setXAxisDomain([start, end])
+        setActivePreset('custom')
       }
     }
 
@@ -410,6 +473,7 @@ function MarketDataChart({ data, selectedIndicators = [] }) {
 
     if (startPoint && endPoint) {
       setXAxisDomain([startPoint.timestamp, endPoint.timestamp])
+      setActivePreset('custom')
     }
   }, [allChartData])
 
@@ -735,39 +799,189 @@ function MarketDataChart({ data, selectedIndicators = [] }) {
 
   return (
     <div style={{ width: '100%', marginTop: '20px' }} ref={containerRef}>
-      {/* Chart Type Toggle */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '10px', gap: '8px' }}>
-        <button
-          onClick={() => setChartType('candlestick')}
-          style={{
-            padding: '8px 16px',
-            border: 'none',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            fontWeight: chartType === 'candlestick' ? '600' : '400',
-            backgroundColor: chartType === 'candlestick' ? '#1a1a2e' : '#f0f0f0',
-            color: chartType === 'candlestick' ? '#fff' : '#333',
-            transition: 'all 0.2s ease',
-          }}
-        >
-          📊 Candlestick
-        </button>
-        <button
-          onClick={() => setChartType('line')}
-          style={{
-            padding: '8px 16px',
-            border: 'none',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            fontWeight: chartType === 'line' ? '600' : '400',
-            backgroundColor: chartType === 'line' ? '#1a1a2e' : '#f0f0f0',
-            color: chartType === 'line' ? '#fff' : '#333',
-            transition: 'all 0.2s ease',
-          }}
-        >
-          📈 Line
-        </button>
+      {/* Chart Toolbar */}
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: '10px',
+        gap: '12px',
+        flexWrap: 'wrap',
+      }}>
+        {/* Time Range Presets */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <span style={{ fontSize: '12px', color: '#888', fontWeight: '600', marginRight: '4px' }}>Range:</span>
+          {TIME_RANGE_PRESETS.map((preset) => (
+            <button
+              key={preset.label}
+              onClick={() => handlePresetSelect(preset)}
+              title={preset.tooltip}
+              style={{
+                padding: '5px 10px',
+                border: activePreset === preset.label ? '1px solid #6366f1' : '1px solid #ddd',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontWeight: activePreset === preset.label ? '700' : '500',
+                fontSize: '12px',
+                backgroundColor: activePreset === preset.label ? '#6366f1' : 'transparent',
+                color: activePreset === preset.label ? '#fff' : '#555',
+                transition: 'all 0.15s ease',
+                minWidth: '36px',
+                textAlign: 'center',
+              }}
+            >
+              {preset.label}
+            </button>
+          ))}
+
+          {/* Custom Range Toggle */}
+          <button
+            onClick={() => setCustomRangeOpen(!customRangeOpen)}
+            title="Custom date range"
+            style={{
+              padding: '5px 10px',
+              border: activePreset === 'custom' || customRangeOpen ? '1px solid #6366f1' : '1px solid #ddd',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontWeight: activePreset === 'custom' || customRangeOpen ? '700' : '500',
+              fontSize: '12px',
+              backgroundColor: activePreset === 'custom' || customRangeOpen ? '#6366f1' : 'transparent',
+              color: activePreset === 'custom' || customRangeOpen ? '#fff' : '#555',
+              transition: 'all 0.15s ease',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+            }}
+          >
+            Custom
+          </button>
+        </div>
+
+        {/* Chart Type Toggle */}
+        <div style={{ display: 'flex', gap: '6px' }}>
+          <button
+            onClick={() => setChartType('candlestick')}
+            style={{
+              padding: '5px 12px',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontWeight: chartType === 'candlestick' ? '600' : '400',
+              fontSize: '12px',
+              backgroundColor: chartType === 'candlestick' ? '#1a1a2e' : '#f0f0f0',
+              color: chartType === 'candlestick' ? '#fff' : '#333',
+              transition: 'all 0.2s ease',
+            }}
+          >
+            Candlestick
+          </button>
+          <button
+            onClick={() => setChartType('line')}
+            style={{
+              padding: '5px 12px',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontWeight: chartType === 'line' ? '600' : '400',
+              fontSize: '12px',
+              backgroundColor: chartType === 'line' ? '#1a1a2e' : '#f0f0f0',
+              color: chartType === 'line' ? '#fff' : '#333',
+              transition: 'all 0.2s ease',
+            }}
+          >
+            Line
+          </button>
+        </div>
       </div>
+
+      {/* Custom Date Range Picker */}
+      {customRangeOpen && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px',
+          marginBottom: '10px',
+          padding: '10px 14px',
+          backgroundColor: '#f8f9fa',
+          borderRadius: '6px',
+          border: '1px solid #e0e0e0',
+          flexWrap: 'wrap',
+        }}>
+          <label style={{ fontSize: '12px', fontWeight: '600', color: '#555' }}>From:</label>
+          <input
+            type="datetime-local"
+            value={customStartDate}
+            onChange={(e) => setCustomStartDate(e.target.value)}
+            min={dataTimeBounds ? toDateTimeLocalString(dataTimeBounds.min) : undefined}
+            max={dataTimeBounds ? toDateTimeLocalString(dataTimeBounds.max) : undefined}
+            style={{
+              padding: '5px 8px',
+              border: '1px solid #ccc',
+              borderRadius: '4px',
+              fontSize: '12px',
+              color: '#333',
+            }}
+          />
+          <label style={{ fontSize: '12px', fontWeight: '600', color: '#555' }}>To:</label>
+          <input
+            type="datetime-local"
+            value={customEndDate}
+            onChange={(e) => setCustomEndDate(e.target.value)}
+            min={dataTimeBounds ? toDateTimeLocalString(dataTimeBounds.min) : undefined}
+            max={dataTimeBounds ? toDateTimeLocalString(dataTimeBounds.max) : undefined}
+            style={{
+              padding: '5px 8px',
+              border: '1px solid #ccc',
+              borderRadius: '4px',
+              fontSize: '12px',
+              color: '#333',
+            }}
+          />
+          <button
+            onClick={handleCustomRangeApply}
+            disabled={!customStartDate && !customEndDate}
+            style={{
+              padding: '5px 14px',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: (!customStartDate && !customEndDate) ? 'not-allowed' : 'pointer',
+              fontWeight: '600',
+              fontSize: '12px',
+              backgroundColor: (!customStartDate && !customEndDate) ? '#ccc' : '#6366f1',
+              color: '#fff',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            Apply
+          </button>
+          <button
+            onClick={() => {
+              setCustomStartDate('')
+              setCustomEndDate('')
+              setCustomRangeOpen(false)
+              handleResetZoom()
+            }}
+            style={{
+              padding: '5px 10px',
+              border: '1px solid #ddd',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontWeight: '500',
+              fontSize: '12px',
+              backgroundColor: 'transparent',
+              color: '#666',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            Clear
+          </button>
+          {dataTimeBounds && (
+            <span style={{ fontSize: '11px', color: '#999', marginLeft: '4px' }}>
+              Data: {new Date(dataTimeBounds.min).toLocaleDateString()} - {new Date(dataTimeBounds.max).toLocaleDateString()}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Main Container */}
       <div
@@ -1038,13 +1252,23 @@ function MarketDataChart({ data, selectedIndicators = [] }) {
 
       {/* Info Footer */}
       <div style={{ marginTop: '10px', fontSize: '12px', color: '#6c757d', textAlign: 'center' }}>
-        💡 Drag to zoom • Double-click to reset • Toggle chart type above
+        Drag to zoom | Double-click to reset | Use range presets above
         {chartData.length > 0 && (
           <span style={{ display: 'block', marginTop: '4px' }}>
             {chartData.some(d => d._aggregated) ? (
-              <span style={{ color: '#f0ad4e' }}>⚡ Showing {chartData.length} aggregated bars (zoom in for detail)</span>
+              <span style={{ color: '#f0ad4e' }}>Showing {chartData.length} aggregated bars (zoom in for detail)</span>
             ) : (
-              <span style={{ color: '#5cb85c' }}>✓ Showing all {chartData.length} data points</span>
+              <span style={{ color: '#5cb85c' }}>Showing {chartData.length} of {allChartData.length} data points</span>
+            )}
+            {activePreset !== 'All' && activePreset !== 'custom' && (
+              <span style={{ color: '#6366f1', marginLeft: '8px' }}>
+                [{activePreset} range]
+              </span>
+            )}
+            {activePreset === 'custom' && (
+              <span style={{ color: '#6366f1', marginLeft: '8px' }}>
+                [custom range]
+              </span>
             )}
           </span>
         )}

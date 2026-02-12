@@ -82,6 +82,8 @@ class CTraderBroker(BaseBroker):
         # Multiple callbacks per asset (supports multiple operations on same asset)
         self._data_callbacks: Dict[str, List[Callable]] = {}  # asset -> [callbacks]
         self._data_callback_ids: Dict[str, List[str]] = {}  # asset -> [callback_ids] for tracking
+        self._trendbar_subscriptions: Dict[str, set] = {}  # asset -> set of subscribed period IDs
+        self._live_trendbar_volumes: Dict[str, Dict[int, int]] = {}  # symbol_id -> {period -> volume}
         self._symbol_cache: Dict[str, int] = {}  # asset -> symbol_id
         self._symbol_id_to_name: Dict[int, str] = {}  # symbol_id -> asset (reverse lookup)
         self._symbol_digits: Dict[int, int] = {}  # symbol_id -> digits (decimal places)
@@ -528,6 +530,8 @@ class CTraderBroker(BaseBroker):
                 self._handle_execution_event(extracted)
             elif message_type == "ProtoOASubscribeSpotsRes":
                 self._handle_subscribe_spots_res(extracted)
+            elif message_type == "ProtoOASubscribeLiveTrendbarRes":
+                logger.debug("[Reactor Thread] Live trendbar subscription confirmed")
             elif message_type in ("ProtoOAGetAccountListByAccessTokenRes", "ProtoOAGetAccountListRes"):
                 # Already handled in _on_account_list callback
                 pass
@@ -590,6 +594,22 @@ class CTraderBroker(BaseBroker):
             digits = self._symbol_digits.get(symbol_id, 5)
             logger.debug(f"Spot price conversion: raw_bid={raw_bid} -> {bid:.5f}, raw_ask={raw_ask} -> {ask:.5f} (digits={digits})")
 
+            # Extract volume from live trendbar data if present
+            # ProtoOASpotEvent includes trendbar field when subscribed via ProtoOASubscribeLiveTrendbarReq
+            tick_volume = 0
+            if hasattr(event, 'trendbar') and event.trendbar:
+                for tb in event.trendbar:
+                    vol = getattr(tb, 'volume', 0)
+                    period = getattr(tb, 'period', None)
+                    if vol > 0:
+                        tick_volume = max(tick_volume, vol)
+                    # Cache the latest volume per period for this symbol
+                    if period is not None:
+                        if symbol_id not in self._live_trendbar_volumes:
+                            self._live_trendbar_volumes[symbol_id] = {}
+                        self._live_trendbar_volumes[symbol_id][period] = vol
+                logger.debug(f"[cTrader] Spot event has {len(event.trendbar)} trendbar(s), volume={tick_volume}")
+
             # Find asset by symbol_id
             asset = None
             for cached_asset, cached_symbol_id in self._symbol_cache.items():
@@ -617,6 +637,7 @@ class CTraderBroker(BaseBroker):
                     "price": mid_price,
                     "bid": bid,
                     "ask": ask,
+                    "size": tick_volume,
                     "timestamp": datetime.utcnow()
                 }
                 # Fan out to ALL registered callbacks for this asset
@@ -628,7 +649,7 @@ class CTraderBroker(BaseBroker):
                     except Exception as cb_error:
                         cb_id = callback_ids[i] if i < len(callback_ids) else f"callback_{i}"
                         logger.error(f"Error in callback {cb_id} for {asset}: {cb_error}")
-                logger.debug(f"Spot update for {asset}: mid={mid_price:.5f}, bid={bid:.5f}, ask={ask:.5f} (sent to {len(callbacks)} callbacks)")
+                logger.debug(f"Spot update for {asset}: mid={mid_price:.5f}, bid={bid:.5f}, ask={ask:.5f}, vol={tick_volume} (sent to {len(callbacks)} callbacks)")
 
         except Exception as e:
             logger.error(f"Error handling spot event: {e}", exc_info=True)
@@ -1051,6 +1072,7 @@ class CTraderBroker(BaseBroker):
             saved_subscriptions = dict(self._data_subscriptions)
             saved_callbacks = {asset: list(callbacks) for asset, callbacks in self._data_callbacks.items()}
             saved_callback_ids = {asset: list(ids) for asset, ids in self._data_callback_ids.items()}
+            saved_trendbar_subs = {asset: set(periods) for asset, periods in self._trendbar_subscriptions.items()}
 
             # Stop existing reactor
             self._stop_reactor()
@@ -1065,6 +1087,8 @@ class CTraderBroker(BaseBroker):
             self._data_subscriptions.clear()
             self._data_callbacks.clear()
             self._data_callback_ids.clear()
+            self._trendbar_subscriptions.clear()
+            self._live_trendbar_volumes.clear()
 
             # Attempt to reconnect
             logger.info(f"[CONNECTION] 🔄 Connecting to cTrader...")
@@ -1087,6 +1111,18 @@ class CTraderBroker(BaseBroker):
                             logger.info(f"[CONNECTION] ✅ Restored subscription: {asset} ({callback_id})")
                         except Exception as sub_error:
                             logger.error(f"[CONNECTION] ❌ Failed to restore subscription {asset}: {sub_error}")
+
+                # Restore live trendbar subscriptions
+                for asset, periods in saved_trendbar_subs.items():
+                    # Convert period IDs back to bar size strings
+                    reverse_map = {v: k for k, v in self.TRENDBAR_PERIOD_MAP.items()}
+                    bar_sizes = [reverse_map[p] for p in periods if p in reverse_map]
+                    if bar_sizes:
+                        try:
+                            await self.subscribe_live_trendbars(asset, bar_sizes)
+                            logger.info(f"[CONNECTION] ✅ Restored trendbar subscriptions: {asset} ({bar_sizes})")
+                        except Exception as tb_error:
+                            logger.error(f"[CONNECTION] ❌ Failed to restore trendbar subscription {asset}: {tb_error}")
 
                 logger.info(f"[CONNECTION] ✅ All subscriptions restored - trading resumed")
             else:
@@ -1305,13 +1341,21 @@ class CTraderBroker(BaseBroker):
         self,
         asset: str,
         callback: Callable[[Dict[str, Any]], None],
-        callback_id: str = None
+        callback_id: str = None,
+        bar_sizes: list = None
     ) -> bool:
         """
         Subscribe to real-time market data.
 
         Supports multiple callbacks per asset (e.g., multiple operations on same asset).
         The callback_id helps track and remove specific callbacks later.
+
+        Args:
+            asset: Asset symbol (e.g., "EUR-USD")
+            callback: Callback function for tick data
+            callback_id: Unique ID for this callback
+            bar_sizes: Optional list of bar sizes to subscribe live trendbars for
+                      (enables volume data in tick events)
         """
         if not self.connected or not self.authenticated or not self.client:
             logger.error("Not connected to cTrader")
@@ -1381,18 +1425,118 @@ class CTraderBroker(BaseBroker):
 
                 # Wait with timeout
                 try:
-                    return await asyncio.wait_for(future, timeout=10.0)
+                    spot_result = await asyncio.wait_for(future, timeout=10.0)
                 except asyncio.TimeoutError:
                     logger.error(f"[CONNECTION] ❌ Timeout subscribing to market data: {asset}")
                     return False
+
+                # Also subscribe to live trendbars for volume data
+                if spot_result and bar_sizes:
+                    await self.subscribe_live_trendbars(asset, bar_sizes)
+                elif spot_result:
+                    # Default: subscribe to M1 and H1 for basic volume data
+                    await self.subscribe_live_trendbars(asset, ["1 min", "1 hour"])
+
+                return spot_result
 
             except Exception as e:
                 logger.error(f"[CONNECTION] ❌ Error subscribing to market data: {asset} - {e}", exc_info=True)
                 return False
         else:
             # Already subscribed to cTrader, just added callback
+            # But check if we need trendbar subscriptions for new bar sizes
+            if bar_sizes:
+                await self.subscribe_live_trendbars(asset, bar_sizes)
             logger.debug(f"[CONNECTION] Reusing existing subscription for {asset} (callback: {callback_id})")
             return True
+
+    # Period map for live trendbar subscriptions (bar_size -> ProtoOATrendbarPeriod)
+    TRENDBAR_PERIOD_MAP = {
+        "1 min": 1,    # M1
+        "5 mins": 5,   # M5
+        "15 mins": 7,  # M15
+        "30 mins": 8,  # M30
+        "1 hour": 9,   # H1
+        "4 hours": 10, # H4
+        "1 day": 12,   # D1
+        "1 week": 13,  # W1
+    }
+
+    async def subscribe_live_trendbars(self, asset: str, bar_sizes: list = None):
+        """
+        Subscribe to live trendbar updates for an asset.
+
+        This enables volume data in ProtoOASpotEvent responses.
+        Call this after subscribe_market_data to get volume with each tick.
+
+        Args:
+            asset: Asset symbol (e.g., "EUR-USD")
+            bar_sizes: List of bar sizes to subscribe (e.g., ["1 hour", "15 mins"]).
+                      If None, subscribes to common periods (M1, H1).
+        """
+        if not self.connected or not self.authenticated or not self.client:
+            logger.warning(f"Cannot subscribe to live trendbars for {asset} - not connected")
+            return
+
+        symbol_id = await self._get_symbol_id(asset)
+        if symbol_id is None:
+            logger.error(f"Cannot subscribe to live trendbars - symbol not found: {asset}")
+            return
+
+        # Default to common periods if none specified
+        if bar_sizes is None:
+            bar_sizes = ["1 min", "1 hour"]
+
+        if asset not in self._trendbar_subscriptions:
+            self._trendbar_subscriptions[asset] = set()
+
+        for bar_size in bar_sizes:
+            period = self.TRENDBAR_PERIOD_MAP.get(bar_size)
+            if period is None:
+                logger.warning(f"Unknown bar size for trendbar subscription: {bar_size}")
+                continue
+
+            if period in self._trendbar_subscriptions[asset]:
+                logger.debug(f"Already subscribed to live trendbar {bar_size} for {asset}")
+                continue
+
+            try:
+                request = ProtoOASubscribeLiveTrendbarReq()
+                request.ctidTraderAccountId = self.account_id
+                request.symbolId = symbol_id
+                request.period = period
+
+                loop = asyncio.get_event_loop()
+                future = loop.create_future()
+
+                def on_success(res, _bs=bar_size, _p=period):
+                    logger.info(f"[CONNECTION] ✅ Subscribed to live trendbar: {asset} ({_bs}, period={_p})")
+                    self._trendbar_subscriptions.setdefault(asset, set()).add(_p)
+                    if not future.done():
+                        loop.call_soon_threadsafe(future.set_result, True)
+
+                def on_error(failure, _bs=bar_size):
+                    logger.error(f"[CONNECTION] ❌ Failed to subscribe to live trendbar {_bs} for {asset}: {failure}")
+                    if not future.done():
+                        loop.call_soon_threadsafe(future.set_result, False)
+
+                def send_request():
+                    if self.client:
+                        d = self.client.send(request)
+                        d.addCallbacks(on_success, on_error)
+                    else:
+                        if not future.done():
+                            loop.call_soon_threadsafe(future.set_result, False)
+
+                reactor.callFromThread(send_request)
+
+                try:
+                    await asyncio.wait_for(future, timeout=10.0)
+                except asyncio.TimeoutError:
+                    logger.warning(f"Timeout subscribing to live trendbar {bar_size} for {asset}")
+
+            except Exception as e:
+                logger.error(f"Error subscribing to live trendbar {bar_size} for {asset}: {e}")
 
     async def unsubscribe_market_data(self, asset: str, callback_id: str = None):
         """
