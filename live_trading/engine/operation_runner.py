@@ -33,6 +33,11 @@ class OperationRunner:
         self.task: Optional[asyncio.Task] = None
         self.event_loop: Optional[asyncio.AbstractEventLoop] = None
 
+    def _build_op_tag(self, asset: str = "?", strategy: str = "?") -> str:
+        """Build a short operation tag for log messages"""
+        short_id = str(self.operation_id)[-6:]
+        return f"[OP:{short_id} {asset} {strategy}]"
+
     async def start(self):
         """Start the operation"""
         operation = await TradingOperation.get(self.operation_id)
@@ -41,6 +46,9 @@ class OperationRunner:
 
         if operation.status != "active":
             raise ValueError(f"Operation {self.operation_id} is not active")
+
+        # Build operation tag for log messages
+        self._op_tag = self._build_op_tag(operation.asset, operation.strategy_name)
 
         # Get strategy class
         strategy_class = get_strategy(operation.strategy_name)
@@ -93,11 +101,11 @@ class OperationRunner:
         # Create a callback that routes broker ticks to data manager
         # Note: Broker callbacks are synchronous and run in the IBKR API thread,
         # so we need to use run_coroutine_threadsafe to schedule async work
+        op_tag = self._op_tag  # Capture for closure
+
         def broker_tick_callback(tick_data: Dict):
             """Callback to route broker ticks to data manager"""
             if tick_data.get("type") == "tick":
-                # Extract price from tick data
-                # IBKR sends different tick types (bid, ask, last, etc.)
                 price = tick_data.get("price")
                 size = tick_data.get("size", 0.0)
                 timestamp = tick_data.get("timestamp", datetime.utcnow())
@@ -106,13 +114,11 @@ class OperationRunner:
                 tick_count = getattr(broker_tick_callback, '_tick_count', 0) + 1
                 broker_tick_callback._tick_count = tick_count
                 if tick_count == 1:
-                    logger.info(f"[TICK] First tick received for {operation.asset}: price={price}")
+                    logger.info(f"[TICK] {op_tag} First tick: price={price}, size={size}")
                 elif tick_count % 500 == 0:
-                    logger.info(f"[TICK] Tick #{tick_count} for {operation.asset}: price={price}")
+                    logger.info(f"[TICK] {op_tag} Tick #{tick_count}: price={price}")
 
                 if price is not None and self.event_loop is not None:
-                    # Schedule async work from the IBKR thread to the main event loop
-                    # This is the correct way to call async functions from a different thread
                     try:
                         coro = self.data_manager.handle_tick(
                             operation_id=str(self.operation_id),
@@ -121,14 +127,11 @@ class OperationRunner:
                             size=size,
                             timestamp=timestamp
                         )
-                        # Schedule the coroutine in the main event loop
                         future = asyncio.run_coroutine_threadsafe(coro, self.event_loop)
-                        # Don't wait for the result - fire and forget
-                        # The future will be executed in the main event loop
                     except Exception as e:
-                        logger.error(f"Error scheduling tick processing: {e}", exc_info=True)
+                        logger.error(f"[TICK] {op_tag} Error scheduling tick processing: {e}", exc_info=True)
                 elif price is not None:
-                    logger.warning(f"Received tick but no event loop available (price: {price})")
+                    logger.warning(f"[TICK] {op_tag} No event loop available (price: {price})")
 
         # Get broker from data manager and subscribe
         # Use operation_id as callback_id to allow multiple operations on same asset
@@ -145,14 +148,14 @@ class OperationRunner:
                 subscribe_kwargs["bar_sizes"] = operation.bar_sizes
             subscribed = await self.data_manager.broker.subscribe_market_data(**subscribe_kwargs)
             if subscribed:
-                logger.info(f"Subscribed to market data for {operation.asset} (callback_id: {callback_id}, bar_sizes: {operation.bar_sizes})")
+                logger.info(f"[DATA] {self._op_tag} Subscribed to market data (bar_sizes: {operation.bar_sizes})")
             else:
-                logger.warning(f"Failed to subscribe to market data for {operation.asset}")
+                logger.warning(f"[DATA] {self._op_tag} Failed to subscribe to market data")
         else:
-            logger.warning("Broker not available - cannot subscribe to market data")
+            logger.warning(f"[DATA] {self._op_tag} Broker not available - cannot subscribe to market data")
 
         self.running = True
-        logger.info(f"Operation {self.operation_id} started")
+        logger.info(f"{self._op_tag} Operation started")
 
     async def stop(self):
         """Stop the operation"""
@@ -167,9 +170,11 @@ class OperationRunner:
                     asset=operation.asset,
                     callback_id=callback_id
                 )
-                logger.info(f"Unsubscribed from market data for {operation.asset} (callback_id: {callback_id})")
+                tag = getattr(self, '_op_tag', f"[OP:{str(self.operation_id)[-6:]}]")
+                logger.info(f"{tag} Unsubscribed from market data")
             except Exception as e:
-                logger.error(f"Error unsubscribing from market data: {e}")
+                tag = getattr(self, '_op_tag', f"[OP:{str(self.operation_id)[-6:]}]")
+                logger.error(f"{tag} Error unsubscribing from market data: {e}")
 
         # Unregister from data manager
         self.data_manager.unregister_operation(str(self.operation_id))
@@ -182,7 +187,8 @@ class OperationRunner:
             except asyncio.CancelledError:
                 pass
 
-        logger.info(f"Operation {self.operation_id} stopped")
+        tag = getattr(self, '_op_tag', f"[OP:{str(self.operation_id)[-6:]}]")
+        logger.info(f"{tag} Operation stopped")
 
     async def pause(self):
         """Pause the operation"""
@@ -190,7 +196,8 @@ class OperationRunner:
         if operation:
             operation.status = "paused"
             await operation.save()
-            logger.info(f"Operation {self.operation_id} paused")
+            tag = getattr(self, '_op_tag', f"[OP:{str(self.operation_id)[-6:]}]")
+            logger.info(f"{tag} Operation paused")
 
     async def resume(self):
         """Resume the operation"""
@@ -198,26 +205,26 @@ class OperationRunner:
         if operation:
             operation.status = "active"
             await operation.save()
-            logger.info(f"Operation {self.operation_id} resumed")
+            tag = getattr(self, '_op_tag', f"[OP:{str(self.operation_id)[-6:]}]")
+            logger.info(f"{tag} Operation resumed")
 
     async def _on_new_bar(self, bar_data: Dict, indicators: Dict):
         """Callback when a new bar is completed"""
+        tag = getattr(self, '_op_tag', f"[OP:{str(self.operation_id)[-6:]}]")
         if not self.running:
-            logger.debug(f"[DATA] Operation {self.operation_id} not running, ignoring bar")
+            logger.debug(f"[DATA] {tag} Not running, ignoring bar")
             return
 
-        # Get bar size from bar_data (need to pass this through)
-        # For now, use primary bar size
         operation = await TradingOperation.get(self.operation_id)
         if operation and self.strategy_adapter:
-            logger.info(f"[DATA] New bar received for operation {self.operation_id}, passing to strategy adapter")
+            logger.info(f"[DATA] {tag} New bar @ {bar_data.get('timestamp')} close={bar_data.get('close')}, passing to strategy")
             await self.strategy_adapter.on_new_bar(
                 operation.primary_bar_size,
                 bar_data,
                 indicators
             )
         else:
-            logger.warning(f"[DATA] No operation or strategy adapter for operation {self.operation_id}")
+            logger.warning(f"[DATA] {tag} No operation or strategy adapter")
 
     async def _check_existing_historical_data(self, bar_size: str, min_bars: int = 100) -> bool:
         """Check if sufficient historical data already exists in database"""
@@ -229,11 +236,12 @@ class OperationRunner:
             MarketData.bar_size == bar_size
         ).count()
 
+        tag = getattr(self, '_op_tag', f"[OP:{str(self.operation_id)[-6:]}]")
         has_sufficient_data = count >= min_bars
         if has_sufficient_data:
-            logger.info(f"Found {count} existing historical bars for {bar_size} - will load from database")
+            logger.info(f"{tag} Found {count} existing bars for {bar_size} - loading from database")
         else:
-            logger.info(f"Found only {count} existing historical bars for {bar_size} - will fetch from broker")
+            logger.info(f"{tag} Found only {count} bars for {bar_size} - will fetch from broker")
 
         return has_sufficient_data
 
@@ -275,10 +283,12 @@ class OperationRunner:
         if indicators_dict:
             sample_indicators = next((v for v in indicators_dict.values() if v), {})
             indicator_keys = list(sample_indicators.keys())[:10]  # First 10 indicator names
-            logger.info(f"Loaded {len(bars)} historical bars from database for {bar_size}, "
-                       f"{bars_with_indicators} have indicators. Sample indicator columns: {indicator_keys}")
+        tag = getattr(self, '_op_tag', f"[OP:{str(self.operation_id)[-6:]}]")
+        if indicators_dict:
+            logger.info(f"{tag} Loaded {len(bars)} bars from DB for {bar_size}, "
+                       f"{bars_with_indicators} have indicators. Sample: {indicator_keys}")
         else:
-            logger.warning(f"Loaded {len(bars)} historical bars from database for {bar_size} - NO indicators found!")
+            logger.warning(f"{tag} Loaded {len(bars)} bars from DB for {bar_size} - NO indicators found!")
         return bars, indicators_dict
 
     def _calculate_timeout(self, interval: str) -> int:
@@ -328,16 +338,18 @@ class OperationRunner:
         from bson import ObjectId
         from live_trading.models.market_data import MarketData
 
+        tag = getattr(self, '_op_tag', f"[OP:{str(self.operation_id)[-6:]}]")
+
         if not self.data_manager.broker:
-            logger.warning("Broker not available - cannot fetch historical data")
+            logger.warning(f"{tag} Broker not available - cannot fetch historical data")
             return
 
         # Verify broker has fetch_historical_data method
         if not hasattr(self.data_manager.broker, 'fetch_historical_data'):
-            logger.warning(f"Broker {type(self.data_manager.broker).__name__} does not support fetch_historical_data")
+            logger.warning(f"{tag} Broker {type(self.data_manager.broker).__name__} does not support fetch_historical_data")
             return
 
-        logger.info(f"Using broker: {type(self.data_manager.broker).__name__}, connected={getattr(self.data_manager.broker, 'connected', 'N/A')}, authenticated={getattr(self.data_manager.broker, 'authenticated', 'N/A')}")
+        logger.info(f"{tag} Broker: {type(self.data_manager.broker).__name__}, connected={getattr(self.data_manager.broker, 'connected', 'N/A')}, authenticated={getattr(self.data_manager.broker, 'authenticated', 'N/A')}")
 
         # Default interval: 6 months (can be made configurable)
         default_interval = "6 M"
@@ -345,7 +357,7 @@ class OperationRunner:
         # Get interval limits
         interval_limits = self.BAR_SIZE_INTERVAL_LIMITS
 
-        logger.info(f"Fetching historical data for operation {self.operation_id}...")
+        logger.info(f"{tag} Fetching historical data...")
 
         # Track pending historical data requests
         # Use asyncio.Event for each bar size to signal completion
@@ -363,7 +375,7 @@ class OperationRunner:
                 logger.error("Missing context in historical data callback")
                 return
 
-            logger.info(f"Received {len(bars)} historical bars for {bar_size}")
+            logger.info(f"{tag} Received {len(bars)} historical bars for {bar_size}")
 
             # Store data
             completed_data[bar_size] = bars
@@ -393,11 +405,11 @@ class OperationRunner:
                     if bars:
                         completed_data[bar_size] = bars
                         completed_indicators[bar_size] = indicators
-                        logger.info(f"Loaded historical data from database for {bar_size}")
+                        logger.info(f"{tag} Loaded historical data from database for {bar_size}")
                         continue  # Skip broker request for this bar_size
                 except Exception as e:
-                    logger.error(f"Error loading historical data from database for {bar_size}: {e}")
-                    logger.info(f"Will fetch from broker instead")
+                    logger.error(f"{tag} Error loading historical data from database for {bar_size}: {e}")
+                    logger.info(f"{tag} Will fetch from broker instead")
                     # Fall through to fetch from broker
 
             # Create completion event for this bar size
@@ -412,7 +424,7 @@ class OperationRunner:
             }
 
             try:
-                logger.info(f"Calling broker.fetch_historical_data for {operation.asset} ({bar_size}, {interval})")
+                logger.info(f"{tag} Fetching from broker: {bar_size} ({interval})")
                 requested = await self.data_manager.broker.fetch_historical_data(
                     asset=operation.asset,
                     bar_size=bar_size,
@@ -420,15 +432,15 @@ class OperationRunner:
                     callback=historical_data_callback,
                     context=context
                 )
-                logger.info(f"fetch_historical_data returned: {requested} (type: {type(requested).__name__})")
+                logger.info(f"{tag} fetch_historical_data returned: {requested} (type: {type(requested).__name__})")
             except Exception as e:
-                logger.error(f"Exception calling fetch_historical_data for {bar_size}: {e}", exc_info=True)
+                logger.error(f"{tag} Exception fetching historical data for {bar_size}: {e}", exc_info=True)
                 requested = False
 
             if requested is True:
-                logger.info(f"Requested historical data for {operation.asset} ({bar_size}, {interval})")
+                logger.info(f"{tag} Requested historical data: {bar_size} ({interval})")
             else:
-                logger.warning(f"Failed to request historical data for {bar_size} (requested={requested}, type={type(requested).__name__})")
+                logger.warning(f"{tag} Failed to request historical data for {bar_size} (requested={requested})")
                 # Remove from pending if request failed
                 if bar_size in pending_requests:
                     del pending_requests[bar_size]
@@ -442,9 +454,9 @@ class OperationRunner:
                 default=default_interval
             )
             max_wait = self._calculate_timeout(max_interval)
-            logger.info(f"Using timeout of {max_wait} seconds for historical data requests (interval: {max_interval})")
+            logger.info(f"{tag} Timeout: {max_wait}s for historical data (interval: {max_interval})")
         else:
-            logger.info("No pending broker requests - all data loaded from database")
+            logger.info(f"{tag} No pending broker requests - all data loaded from database")
 
         wait_tasks = []
 
@@ -459,9 +471,9 @@ class OperationRunner:
                 async def wait_for_data(bs=bar_size, evt=event, to=timeout):
                     try:
                         await asyncio.wait_for(evt.wait(), timeout=to)
-                        logger.info(f"Historical data received for {bs}")
+                        logger.info(f"{tag} Historical data received for {bs}")
                     except asyncio.TimeoutError:
-                        logger.warning(f"Timeout waiting for historical data for {bs} (timeout: {to}s)")
+                        logger.warning(f"{tag} Timeout waiting for historical data for {bs} (timeout: {to}s)")
 
                 wait_tasks.append(wait_for_data())
 
@@ -472,7 +484,7 @@ class OperationRunner:
         # Process historical data (from database or broker)
         for bar_size, bars in completed_data.items():
             if not bars:
-                logger.warning(f"No historical data received for {bar_size}")
+                logger.warning(f"{tag} No historical data received for {bar_size}")
                 continue
 
             # Check if data came from database (already has indicators) or from broker (needs processing)
@@ -510,7 +522,7 @@ class OperationRunner:
 
                 if data_from_db:
                     # Data already in database - just populate buffers
-                    logger.info(f"Data for {bar_size} already in database - populating buffers only")
+                    logger.info(f"{tag} {bar_size} data from DB - populating buffers")
                     df_with_indicators = df.copy()
                     # Add indicators from database to DataFrame
                     # Convert indicators_map to a DataFrame and join (much faster than row-by-row)
@@ -520,18 +532,18 @@ class OperationRunner:
                         # Join on index (timestamp) - only matching rows get indicator values
                         indicators_matched = len(indicators_df.index.intersection(df_with_indicators.index))
                         df_with_indicators = df_with_indicators.join(indicators_df, how='left')
-                        logger.info(f"Matched indicators for {indicators_matched}/{len(df)} bars from database")
+                        logger.info(f"{tag} Matched indicators for {indicators_matched}/{len(df)} bars ({bar_size})")
                     else:
-                        logger.info(f"No indicators to match for {bar_size}")
+                        logger.info(f"{tag} No indicators to match for {bar_size}")
                 else:
                     # Data from broker - calculate indicators and store in database
                     df_with_indicators = df.copy()
                     if self.data_manager.indicator_calculator:
                         try:
                             df_with_indicators = self.data_manager.indicator_calculator.execute(df.copy())
-                            logger.info(f"Calculated indicators for {len(df_with_indicators)} historical bars ({bar_size})")
+                            logger.info(f"{tag} Calculated indicators for {len(df_with_indicators)} bars ({bar_size})")
                         except Exception as e:
-                            logger.error(f"Error calculating indicators for historical data ({bar_size}): {e}")
+                            logger.error(f"{tag} Error calculating indicators ({bar_size}): {e}")
 
                     # Store bars in database with indicators using batch insert
                     # Process in batches to avoid memory issues and show progress
@@ -539,7 +551,7 @@ class OperationRunner:
                     total_bars = len(df_with_indicators)
                     stored_count = 0
 
-                    logger.info(f"Preparing to store {total_bars} historical bars for {bar_size} in batches of {batch_size}")
+                    logger.info(f"{tag} Storing {total_bars} bars for {bar_size} (batch_size={batch_size})")
 
                     # Get indicator columns once
                     indicator_cols = [col for col in df_with_indicators.columns
@@ -598,25 +610,25 @@ class OperationRunner:
                                 )
                                 batch_data.append(market_data)
                             except Exception as e:
-                                logger.error(f"Error preparing historical bar {idx} for {bar_size}: {e}")
+                                logger.error(f"{tag} Error preparing historical bar {idx} for {bar_size}: {e}")
 
                         # Batch insert
                         if batch_data:
                             try:
                                 await MarketData.insert_many(batch_data)
                                 stored_count += len(batch_data)
-                                logger.info(f"Stored batch {batch_start//batch_size + 1} ({batch_end}/{total_bars} bars, {stored_count} total) for {bar_size}")
+                                logger.info(f"{tag} Stored batch {batch_start//batch_size + 1} ({batch_end}/{total_bars} bars) for {bar_size}")
                             except Exception as e:
-                                logger.error(f"Error batch inserting bars {batch_start}-{batch_end} for {bar_size}: {e}")
+                                logger.error(f"{tag} Error batch inserting bars {batch_start}-{batch_end} for {bar_size}: {e}")
                                 # Fallback to individual inserts for this batch
                                 for md in batch_data:
                                     try:
                                         await md.insert()
                                         stored_count += 1
                                     except Exception as e2:
-                                        logger.error(f"Error storing individual bar for {bar_size}: {e2}")
+                                        logger.error(f"{tag} Error storing individual bar for {bar_size}: {e2}")
 
-                    logger.info(f"Completed storing {stored_count}/{total_bars} historical bars for {bar_size}")
+                    logger.info(f"{tag} Completed storing {stored_count}/{total_bars} bars for {bar_size}")
 
                 # Add to data manager buffer so strategy can use it immediately
                 # Use the DataFrame with indicators
@@ -676,12 +688,12 @@ class OperationRunner:
                     existing_timestamps.add(bar_timestamp)
                     bars_added += 1
 
-                logger.info(f"Buffer populated for {bar_size}: {bars_added} bars added, {duplicates_skipped} duplicates skipped")
+                logger.info(f"{tag} Buffer populated for {bar_size}: {bars_added} added, {duplicates_skipped} duplicates skipped")
 
             except Exception as e:
-                logger.error(f"Error processing historical data for {bar_size}: {e}", exc_info=True)
+                logger.error(f"{tag} Error processing historical data for {bar_size}: {e}", exc_info=True)
 
-        logger.info(f"Completed fetching historical data for operation {self.operation_id}")
+        logger.info(f"{tag} Historical data fetch complete")
 
     async def _signal_historical_data_complete(self, bar_size: str, event: asyncio.Event):
         """Helper to signal historical data completion (runs in main event loop)"""
@@ -727,11 +739,13 @@ class OperationRunner:
         from bson import ObjectId
         import pandas as pd
 
+        tag = getattr(self, '_op_tag', f"[OP:{str(self.operation_id)[-6:]}]")
+
         if not self.data_manager.broker:
-            logger.warning("Broker not available - cannot fill data gaps")
+            logger.warning(f"{tag} Broker not available - cannot fill data gaps")
             return
 
-        logger.info(f"Checking for data gaps for operation {self.operation_id}...")
+        logger.info(f"{tag} Checking for data gaps...")
         current_time = datetime.utcnow()
 
         for bar_size in operation.bar_sizes:
@@ -740,7 +754,7 @@ class OperationRunner:
                 last_timestamp = await self._get_last_timestamp(bar_size)
 
                 if last_timestamp is None:
-                    logger.info(f"No existing data for {bar_size} - skipping gap check")
+                    logger.info(f"{tag} No existing data for {bar_size} - skipping gap check")
                     continue
 
                 # Calculate time gap
@@ -759,7 +773,7 @@ class OperationRunner:
                     logger.debug(f"No significant gap for {bar_size} (gap: {time_gap}, expected bars: {expected_bars})")
                     continue
 
-                logger.info(f"Found gap for {bar_size}: last timestamp {last_timestamp}, current time {current_time}, gap: {time_gap}, expected bars: {expected_bars}")
+                logger.info(f"{tag} Gap found for {bar_size}: last={last_timestamp}, gap={time_gap}, expected_bars={expected_bars}")
 
                 # Calculate interval string for the gap
                 # Request data from last_timestamp to current_time
@@ -783,7 +797,7 @@ class OperationRunner:
                 # IBKR will return data up to the limit
                 request_interval = "1 M"  # Request 1 month, IBKR will return what's available
 
-                logger.info(f"Requesting gap-fill data for {bar_size}: interval={request_interval}, from {last_timestamp} to {current_time}")
+                logger.info(f"{tag} Requesting gap-fill for {bar_size}: interval={request_interval}")
 
                 # Request historical data to fill the gap
                 # Use a callback to process the received data
@@ -801,7 +815,7 @@ class OperationRunner:
                             self._parse_bar_timestamp(bar["date"]) > last_timestamp
                         ]
                         completed_data.extend(filtered_bars)
-                        logger.info(f"Received {len(filtered_bars)} gap-fill bars for {bar_size}")
+                        logger.info(f"{tag} Received {len(filtered_bars)} gap-fill bars for {bar_size}")
 
                         # Signal completion
                         if self.event_loop:
@@ -837,16 +851,16 @@ class OperationRunner:
                                 bars=completed_data,
                                 operation=operation
                             )
-                            logger.info(f"Filled gap for {bar_size}: stored {len(completed_data)} bars")
+                            logger.info(f"{tag} Gap filled for {bar_size}: stored {len(completed_data)} bars")
                         else:
-                            logger.warning(f"No gap-fill data received for {bar_size}")
+                            logger.warning(f"{tag} No gap-fill data received for {bar_size}")
                     except asyncio.TimeoutError:
-                        logger.warning(f"Timeout waiting for gap-fill data for {bar_size}")
+                        logger.warning(f"{tag} Timeout waiting for gap-fill data for {bar_size}")
                 else:
-                    logger.warning(f"Failed to request gap-fill data for {bar_size}")
+                    logger.warning(f"{tag} Failed to request gap-fill data for {bar_size}")
 
             except Exception as e:
-                logger.error(f"Error filling gap for {bar_size}: {e}", exc_info=True)
+                logger.error(f"{tag} Error filling gap for {bar_size}: {e}", exc_info=True)
 
     def _parse_bar_timestamp(self, timestamp_value) -> datetime:
         """Parse timestamp from IBKR bar data (can be unix timestamp or string)"""
@@ -883,6 +897,7 @@ class OperationRunner:
         if not bars:
             return
 
+        tag = getattr(self, '_op_tag', f"[OP:{str(self.operation_id)[-6:]}]")
         try:
             # Convert bars to DataFrame
             df = pd.DataFrame(bars)
@@ -907,9 +922,9 @@ class OperationRunner:
             if self.data_manager.indicator_calculator:
                 try:
                     df_with_indicators = self.data_manager.indicator_calculator.execute(df.copy())
-                    logger.info(f"Calculated indicators for {len(df_with_indicators)} gap-fill bars ({bar_size})")
+                    logger.info(f"{tag} Calculated indicators for {len(df_with_indicators)} gap-fill bars ({bar_size})")
                 except Exception as e:
-                    logger.error(f"Error calculating indicators for gap-fill data ({bar_size}): {e}")
+                    logger.error(f"{tag} Error calculating gap-fill indicators ({bar_size}): {e}")
 
             # Store in batches (reuse the batch insert logic)
             batch_size = 1000
@@ -962,7 +977,7 @@ class OperationRunner:
                         )
                         batch_data.append(market_data)
                     except Exception as e:
-                        logger.error(f"Error preparing gap-fill bar {idx} for {bar_size}: {e}")
+                        logger.error(f"{tag} Error preparing gap-fill bar {idx} for {bar_size}: {e}")
 
                 # Batch insert
                 if batch_data:
@@ -970,12 +985,12 @@ class OperationRunner:
                         await MarketData.insert_many(batch_data)
                         stored_count += len(batch_data)
                     except Exception as e:
-                        logger.error(f"Error batch inserting gap-fill bars {batch_start}-{batch_end} for {bar_size}: {e}")
+                        logger.error(f"{tag} Error batch inserting gap-fill bars {batch_start}-{batch_end} for {bar_size}: {e}")
 
-            logger.info(f"Stored {stored_count} gap-fill bars for {bar_size}")
+            logger.info(f"{tag} Stored {stored_count} gap-fill bars for {bar_size}")
 
         except Exception as e:
-            logger.error(f"Error processing gap-fill data for {bar_size}: {e}", exc_info=True)
+            logger.error(f"{tag} Error processing gap-fill data for {bar_size}: {e}", exc_info=True)
 
     async def _handle_signal(
         self,
@@ -984,13 +999,14 @@ class OperationRunner:
         price: float
     ):
         """Handle trading signal from strategy"""
+        tag = getattr(self, '_op_tag', f"[OP:{str(self.operation_id)[-6:]}]")
         operation = await TradingOperation.get(self.operation_id)
         if not operation:
-            logger.warning(f"[ORDER] ⚠️ Operation {operation_id} not found, cannot place order")
+            logger.warning(f"[ORDER] {tag} Operation not found, cannot place order")
             return
 
         if operation.status != "active":
-            logger.warning(f"[ORDER] ⚠️ Operation '{operation.status}' - order blocked: {signal_type} {operation.asset}")
+            logger.warning(f"[ORDER] {tag} Status '{operation.status}' - order blocked: {signal_type}")
             return
 
         # Place order
@@ -1002,7 +1018,7 @@ class OperationRunner:
                 price=price
             )
             if order.status == "REJECTED":
-                logger.error(f"[ORDER] ❌ Order rejected by broker: {signal_type} {operation.asset}")
+                logger.error(f"[ORDER] {tag} Order rejected by broker: {signal_type}")
         except Exception as e:
-            logger.error(f"[ORDER] ❌ Error placing order for {signal_type}: {e}", exc_info=True)
+            logger.error(f"[ORDER] {tag} Error placing order for {signal_type}: {e}", exc_info=True)
 

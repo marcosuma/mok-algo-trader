@@ -183,7 +183,8 @@ class DataManager:
             if callback:
                 self.bar_callbacks[operation_id][bar_size] = callback
 
-        logger.info(f"Registered operation {operation_id} for bar sizes: {bar_sizes}")
+        short_id = str(operation_id)[-6:]
+        logger.info(f"[DataManager] [OP:{short_id}] Registered for bar sizes: {bar_sizes}")
 
     def unregister_operation(self, operation_id: str):
         """Unregister a trading operation"""
@@ -193,7 +194,8 @@ class DataManager:
             del self.data_buffers[operation_id]
         if operation_id in self.bar_callbacks:
             del self.bar_callbacks[operation_id]
-        logger.info(f"Unregistered operation {operation_id}")
+        short_id = str(operation_id)[-6:]
+        logger.info(f"[DataManager] [OP:{short_id}] Unregistered")
 
     async def handle_tick(
         self,
@@ -211,7 +213,8 @@ class DataManager:
 
         # Log periodically (every 100 ticks)
         if self.tick_counts[operation_id] % 100 == 0:
-            logger.debug(f"[DataManager] Received {self.tick_counts[operation_id]} ticks for operation {operation_id}")
+            short_id = str(operation_id)[-6:]
+            logger.debug(f"[DataManager] [OP:{short_id} {asset}] {self.tick_counts[operation_id]} ticks received")
 
         # Process tick through all bar aggregators for this operation
         for bar_size, aggregator in self.aggregators[operation_id].items():
@@ -257,11 +260,13 @@ class DataManager:
     ):
         """Process a completed bar"""
         bar_timestamp = bar_data.get("timestamp")
+        short_id = str(operation_id)[-6:]
+        op_tag = f"[OP:{short_id} {asset}]"
 
         # Validate incoming bar data
         if not self._is_ohlc_valid(bar_data):
             logger.error(
-                f"[DataManager] REJECTING invalid bar for {bar_size} at {bar_timestamp}: "
+                f"[DataManager] {op_tag} REJECTING invalid bar {bar_size} at {bar_timestamp}: "
                 f"o={bar_data.get('open')}, h={bar_data.get('high')}, "
                 f"l={bar_data.get('low')}, c={bar_data.get('close')}, v={bar_data.get('volume')}"
             )
@@ -296,12 +301,12 @@ class DataManager:
                         existing_bar["volume"] = bar_data.get("volume", 0)
 
                 found_existing = True
-                logger.debug(f"Updated existing bar in buffer for {bar_size} at {bar_timestamp}")
+                logger.debug(f"[DataManager] {op_tag} Updated bar in buffer: {bar_size} @ {bar_timestamp}")
                 break
 
         if not found_existing:
             existing_bars.append(bar_data)
-            logger.debug(f"Added new bar to buffer for {bar_size} at {bar_timestamp}")
+            logger.debug(f"[DataManager] {op_tag} New bar in buffer: {bar_size} @ {bar_timestamp}")
 
         # Apply data retention limit
         operation = await TradingOperation.get(operation_id)
@@ -340,7 +345,7 @@ class DataManager:
                             for indicator_name, indicator_value in indicators.items():
                                 last_bar[indicator_name] = indicator_value
                 except Exception as e:
-                    logger.error(f"Error calculating indicators: {e}")
+                    logger.error(f"[DataManager] {op_tag} Error calculating indicators for {bar_size}: {e}")
 
         # Store in database using upsert to prevent duplicates
         # If a bar already exists for this timestamp (e.g., from historical data), update it
@@ -384,7 +389,7 @@ class DataManager:
                         merged_indicators = {**existing.indicators, **indicators}
                         existing.indicators = merged_indicators
                     await existing.save()
-                    logger.debug(f"Updated bar for operation {operation_id}, bar_size {bar_size}, timestamp {bar_data['timestamp']}")
+                    logger.debug(f"[DataManager] {op_tag} Updated DB bar: {bar_size} @ {bar_data['timestamp']}")
             else:
                 # Create new bar
                 market_data = MarketData(
@@ -399,15 +404,15 @@ class DataManager:
                     indicators=indicators
                 )
                 await market_data.insert()
-                logger.debug(f"Stored new bar for operation {operation_id}, bar_size {bar_size}, timestamp {bar_data['timestamp']}")
+                logger.debug(f"[DataManager] {op_tag} Stored new bar: {bar_size} @ {bar_data['timestamp']}")
         except Exception as e:
-            logger.error(f"Error storing bar: {e}", exc_info=True)
+            logger.error(f"[DataManager] {op_tag} Error storing bar {bar_size}: {e}", exc_info=True)
 
         # Notify callback
         if operation_id in self.bar_callbacks and bar_size in self.bar_callbacks[operation_id]:
             callback = self.bar_callbacks[operation_id][bar_size]
-            logger.debug(f"[DATA] Bar completed: {bar_size} @ {bar_data.get('timestamp')} close={bar_data.get('close')}")
-            logger.debug(f"[DATA] Indicators: {list(indicators.keys()) if indicators else 'none'}")
+            logger.debug(f"[DATA] {op_tag} Bar completed: {bar_size} @ {bar_data.get('timestamp')} close={bar_data.get('close')}")
+            logger.debug(f"[DATA] {op_tag} Indicators: {list(indicators.keys()) if indicators else 'none'}")
 
             # Handle both sync and async callbacks
             # For bound methods, check the underlying function
@@ -420,7 +425,7 @@ class DataManager:
                 if asyncio.iscoroutine(result):
                     await result
         else:
-            logger.debug(f"[DATA] No callback registered for operation {operation_id}, bar_size {bar_size}")
+            logger.debug(f"[DATA] {op_tag} No callback registered for {bar_size}")
 
     def _buffer_to_dataframe(self, operation_id: str, bar_size: str) -> pd.DataFrame:
         """Convert buffer to DataFrame for indicator calculation"""

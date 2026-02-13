@@ -54,17 +54,21 @@ class OrderManager:
         Returns:
             Created Order document
         """
-        logger.info(f"[ORDER] 📝 Preparing order: {signal_type} {asset} @ {price or 'MARKET'}")
+        # Build operation tag for log messages
+        short_id = str(operation_id)[-6:]
+        op_tag = f"[OP:{short_id} {asset}]"
+
+        logger.info(f"[ORDER] {op_tag} Preparing order: {signal_type} @ {price or 'MARKET'}")
 
         # Get operation
         operation = await TradingOperation.get(operation_id)
         if not operation:
-            logger.error(f"[ORDER] ❌ FAILED - Operation {operation_id} not found")
+            logger.error(f"[ORDER] {op_tag} FAILED - Operation not found")
             raise ValueError(f"Operation {operation_id} not found")
 
         # Determine order type
         order_type = "LIMIT" if price else "MARKET"
-        logger.info(f"[ORDER] Order type: {order_type}")
+        logger.info(f"[ORDER] {op_tag} Order type: {order_type}")
 
         # Calculate stop loss and take profit if not provided
         if stop_loss is None or take_profit is None:
@@ -153,7 +157,7 @@ class OrderManager:
                 "REJECTED": "❌",
             }
             emoji = status_emoji.get(new_status, "❓")
-            logger.info(f"[ORDER] {emoji} Status update: {broker_status} -> {new_status} (filled: {filled}, price: {avg_fill_price})")
+            logger.info(f"[ORDER] {op_tag} {emoji} Status: {broker_status} -> {new_status} (filled: {filled}, price: {avg_fill_price})")
 
             # Schedule async database update
             async def update_order():
@@ -172,11 +176,11 @@ class OrderManager:
                             order_to_update.filled_at = datetime.utcnow()
                         await order_to_update.save()
 
-                        logger.info(f"[ORDER] 📊 Database updated: order {order_to_update.id} ({old_status} -> {new_status})")
+                        logger.info(f"[ORDER] {op_tag} DB updated: order {order_to_update.id} ({old_status} -> {new_status})")
 
                         # If order is filled, trigger on_order_filled
                         if new_status == "FILLED":
-                            logger.info(f"[ORDER] ✅ ORDER FILLED! {signal_type} {asset} @ {avg_fill_price} (qty: {filled})")
+                            logger.info(f"[ORDER] {op_tag} FILLED! {signal_type} @ {avg_fill_price} (qty: {filled})")
                             await self.on_order_filled(
                                 order_to_update.id,
                                 {
@@ -185,24 +189,24 @@ class OrderManager:
                                 }
                             )
                         elif new_status == "REJECTED":
-                            logger.error(f"[ORDER] ❌ ORDER REJECTED! {signal_type} {asset} - Reason: {status_data.get('reason', 'unknown')}")
+                            logger.error(f"[ORDER] {op_tag} REJECTED! {signal_type} - Reason: {status_data.get('reason', 'unknown')}")
                         elif new_status == "CANCELLED":
-                            logger.warning(f"[ORDER] 🚫 ORDER CANCELLED: {signal_type} {asset}")
+                            logger.warning(f"[ORDER] {op_tag} CANCELLED: {signal_type}")
                 except Exception as e:
-                    logger.error(f"[ORDER] Error updating order status in callback: {e}", exc_info=True)
+                    logger.error(f"[ORDER] {op_tag} Error updating order status in callback: {e}", exc_info=True)
 
             # Schedule async update in the event loop (callback runs in broker thread)
             if event_loop:
                 asyncio.run_coroutine_threadsafe(update_order(), event_loop)
             else:
-                logger.warning("[ORDER] No event loop available to update order status")
+                logger.warning(f"[ORDER] {op_tag} No event loop available to update order status")
 
         # Calculate default quantity if not provided
         if quantity is None:
             quantity = await self._calculate_default_quantity(operation, entry_price, stop_loss)
 
         # Place order with broker and register callback
-        logger.info(f"[ORDER] 📤 Sending order to broker: {signal_type} {quantity:.2f} {asset} @ {price or 'MARKET'} (SL: {stop_loss}, TP: {take_profit})")
+        logger.info(f"[ORDER] {op_tag} Sending to broker: {signal_type} {quantity:.2f} @ {price or 'MARKET'} (SL: {stop_loss}, TP: {take_profit})")
 
         broker_order_id = await self.broker.place_order(
             asset=asset,
@@ -219,14 +223,14 @@ class OrderManager:
         if not broker_order_id:
             order.status = "REJECTED"
             await order.save()
-            logger.error(f"[ORDER] ❌ BROKER REJECTED - No order ID returned for {signal_type} {asset}")
+            logger.error(f"[ORDER] {op_tag} BROKER REJECTED - No order ID returned for {signal_type}")
             return order
 
         # Update order with broker_order_id
         order.broker_order_id = broker_order_id
         await order.save()
 
-        logger.info(f"[ORDER] ✅ SUBMITTED to broker (order_id: {broker_order_id}) - Awaiting execution...")
+        logger.info(f"[ORDER] {op_tag} SUBMITTED (order_id: {broker_order_id}) - Awaiting execution...")
 
         # Log to journal
         await self.journal.log_action(
@@ -244,7 +248,7 @@ class OrderManager:
             operation_id=operation_id
         )
 
-        logger.info(f"[ORDER] 📋 Summary: {signal_type} {quantity:.2f} {asset} @ {price or 'MARKET'} | SL: {stop_loss:.5f} | TP: {take_profit:.5f}")
+        logger.info(f"[ORDER] {op_tag} Summary: {signal_type} {quantity:.2f} @ {price or 'MARKET'} | SL: {stop_loss:.5f} | TP: {take_profit:.5f}")
         return order
 
     async def calculate_stop_loss(
@@ -381,6 +385,12 @@ class OrderManager:
             logger.error(f"[ORDER] Order {order_id} not found")
             return
 
+        # Build operation tag for log messages
+        operation_for_tag = await TradingOperation.get(order.operation_id)
+        asset_label = operation_for_tag.asset if operation_for_tag else "?"
+        short_id = str(order.operation_id)[-6:]
+        op_tag = f"[OP:{short_id} {asset_label}]"
+
         # Update order
         order.status = "FILLED"
         order.filled_quantity = fill_data.get("filled", order.quantity)
@@ -388,7 +398,7 @@ class OrderManager:
         order.filled_at = datetime.utcnow()
         await order.save()
 
-        logger.info(f"[ORDER] 🎯 Processing fill: {order.action} qty={order.filled_quantity} @ {order.avg_fill_price}")
+        logger.info(f"[ORDER] {op_tag} Processing fill: {order.action} qty={order.filled_quantity} @ {order.avg_fill_price}")
 
         # Determine if this is ENTRY, EXIT, or SCALE IN
         # Check if there's an open position for this operation
@@ -443,7 +453,7 @@ class OrderManager:
                 open_position.current_price = order.avg_fill_price  # Update current price
                 await open_position.save()
 
-                logger.info(f"[POSITION] 📈 Scaled in: {order.action} {order.filled_quantity} units. Position now: {open_position.quantity} @ {new_avg_entry_price:.5f}")
+                logger.info(f"[POSITION] {op_tag} Scaled in: {order.action} {order.filled_quantity} units. Position now: {open_position.quantity} @ {new_avg_entry_price:.5f}")
 
             else:
                 # SCALE OUT / CLOSE: Reduce or close position
@@ -572,7 +582,7 @@ class OrderManager:
                     # Full close
                     open_position.closed_at = datetime.utcnow()
                     open_position.quantity = 0.0
-                    logger.info(f"[POSITION] 🏁 CLOSED: {position_type} {position_abs_quantity} units | P/L: {total_pnl:.2f}")
+                    logger.info(f"[POSITION] {op_tag} CLOSED: {position_type} {position_abs_quantity} units | P/L: {total_pnl:.2f}")
                 else:
                     # Partial close - reduce quantity
                     if position_type == "LONG":
@@ -580,7 +590,7 @@ class OrderManager:
                     else:  # SHORT
                         open_position.quantity += close_quantity  # quantity is negative, so add
                     open_position.current_price = order.avg_fill_price
-                    logger.info(f"[POSITION] 📉 Partial close: {close_quantity} of {position_abs_quantity} units | Remaining: {open_position.quantity} | Partial P/L: {total_pnl:.2f}")
+                    logger.info(f"[POSITION] {op_tag} Partial close: {close_quantity} of {position_abs_quantity} units | Remaining: {open_position.quantity} | Partial P/L: {total_pnl:.2f}")
 
                 await open_position.save()
 
@@ -619,7 +629,7 @@ class OrderManager:
             )
             await position.insert()
 
-            logger.info(f"[POSITION] 🚀 OPENED: {position_type} {operation.asset} | Qty: {order.filled_quantity} @ {order.avg_fill_price:.5f} | SL: {order.stop_loss:.5f if order.stop_loss else 'N/A'} | TP: {order.take_profit:.5f if order.take_profit else 'N/A'}")
+            logger.info(f"[POSITION] {op_tag} OPENED: {position_type} | Qty: {order.filled_quantity} @ {order.avg_fill_price:.5f} | SL: {order.stop_loss:.5f if order.stop_loss else 'N/A'} | TP: {order.take_profit:.5f if order.take_profit else 'N/A'}")
 
         # Log to journal
         await self.journal.log_action(
