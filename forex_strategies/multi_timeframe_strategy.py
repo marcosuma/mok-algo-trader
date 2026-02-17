@@ -6,11 +6,14 @@ simultaneously. Higher timeframes (e.g., 1 day) are used for trend confirmation,
 while lower timeframes (e.g., 15 mins, 1 hour) are used for precise entry/exit signals.
 """
 
+import logging
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional
 from forex_strategies.base_strategy import BaseForexStrategy
 from forex_strategies.adaptive_multi_indicator_strategy import AdaptiveMultiIndicatorStrategy
+
+logger = logging.getLogger(__name__)
 
 
 class MultiTimeframeStrategy(BaseForexStrategy):
@@ -52,7 +55,11 @@ class MultiTimeframeStrategy(BaseForexStrategy):
         self, base_df: pd.DataFrame, data_dir: str, contract_name: str
     ) -> Dict[str, pd.DataFrame]:
         """
-        Load data for all required timeframes.
+        Load data for all required timeframes from CSV files on disk.
+
+        Note: This method is used during backtesting. In live trading the
+        StrategyAdapter provides multi-timeframe columns directly in the
+        DataFrame (prefixed with ``{bar_size}_``).
 
         Args:
             base_df: The base DataFrame (from the input CSV)
@@ -67,17 +74,25 @@ class MultiTimeframeStrategy(BaseForexStrategy):
 
         timeframe_data = {}
 
+        if not os.path.isdir(data_dir):
+            logger.debug(f"Data directory '{data_dir}' does not exist, skipping CSV loading")
+            return timeframe_data
+
         # Extract contract info from base_df or contract_name
         # Try to infer from the CSV path or use contract_name
         contract_folder = os.path.join(data_dir, contract_name)
 
         if not os.path.exists(contract_folder):
             # Fallback: try to find contract folder
-            possible_folders = [
-                os.path.join(data_dir, d)
-                for d in os.listdir(data_dir)
-                if os.path.isdir(os.path.join(data_dir, d))
-            ]
+            try:
+                possible_folders = [
+                    os.path.join(data_dir, d)
+                    for d in os.listdir(data_dir)
+                    if os.path.isdir(os.path.join(data_dir, d))
+                ]
+            except OSError as e:
+                logger.debug(f"Could not list data directory '{data_dir}': {e}")
+                return timeframe_data
             if possible_folders:
                 contract_folder = possible_folders[0]
 
@@ -110,7 +125,7 @@ class MultiTimeframeStrategy(BaseForexStrategy):
                     if len(df) > 0:
                         timeframe_data[bar_size] = df
                 except Exception as e:
-                    print(f"Warning: Could not load {bar_size} data: {e}")
+                    logger.warning(f"Could not load {bar_size} data from {csv_files[0]}: {e}")
                     continue
 
         return timeframe_data
@@ -291,60 +306,128 @@ class AdaptiveMultiTimeframeStrategy(MultiTimeframeStrategy):
         2. Use higher timeframes to determine overall trend
         3. Use lower timeframe for entry/exit signals
         4. Only take trades in the direction of the higher timeframe trend
+
+        In live trading the StrategyAdapter pre-populates multi-timeframe
+        columns with a ``{bar_size}_`` prefix (e.g. ``1 day_close``).  When
+        these columns are detected the strategy uses them directly instead
+        of trying to load CSV files from disk.
         """
         df = df.copy()
 
-        # Contract name must be provided
+        # ----- Live-trading path: use inline multi-timeframe columns -----
+        inline_higher_tf = self._detect_inline_timeframes(df)
+        if inline_higher_tf:
+            logger.info(
+                f"[AMTS] Detected inline higher-timeframe columns for: "
+                f"{list(inline_higher_tf.keys())}. Using live-trading path."
+            )
+            return self._generate_signals_live(df, inline_higher_tf)
+
+        # ----- Backtesting path: load CSV files from disk -----
         contract_name = self.contract_name
         if contract_name is None:
             raise ValueError("contract_name must be provided for multi-timeframe strategy")
 
-        # Load multi-timeframe data
+        logger.debug(f"[AMTS] No inline timeframe columns found, loading CSVs from {self.data_dir}/{contract_name}")
         timeframe_data = self._load_timeframe_data(df, self.data_dir, contract_name)
 
         if not timeframe_data:
-            # Fallback: use single timeframe if multi-timeframe data not available
-            print("Warning: Multi-timeframe data not available, using single timeframe")
-            base_strategy = AdaptiveMultiIndicatorStrategy(
-                initial_cash=self.initial_cash,
-                commission=self.commission,
-                adx_trend_threshold=self.adx_trend_threshold,
-                adx_range_threshold=self.adx_range_threshold,
-                rsi_trend_min=self.rsi_trend_min,
-                rsi_trend_max=self.rsi_trend_max,
-                rsi_oversold=self.rsi_oversold,
-                rsi_overbought=self.rsi_overbought,
-                atr_stop_multiplier=self.atr_stop_multiplier,
-                atr_take_profit_multiplier=self.atr_take_profit_multiplier,
-                atr_extreme_multiplier=self.atr_extreme_multiplier,
-                extrema_lookback=self.extrema_lookback,
-            )
-            return base_strategy.generate_signals(df)
+            logger.info("[AMTS] Multi-timeframe CSV data not available, falling back to single timeframe")
+            return self._generate_base_signals(df)
 
         # Align timeframes
         aligned_data = self._align_timeframes(timeframe_data)
-
         if not aligned_data:
-            return df
+            return self._generate_base_signals(df)
 
-        # Get trend from higher timeframes
-        higher_trend = self._get_trend_from_higher_timeframe(aligned_data)
+        return self._generate_signals_from_aligned(df, aligned_data)
 
-        # Use the lowest timeframe for entry signals
-        if self.lower_timeframes:
-            signal_timeframe = self.lower_timeframes[0]
-        else:
-            signal_timeframe = list(aligned_data.keys())[0]
+    # ------------------------------------------------------------------
+    # Live-trading signal generation
+    # ------------------------------------------------------------------
 
-        if signal_timeframe not in aligned_data:
-            return df
+    def _detect_inline_timeframes(self, df: pd.DataFrame) -> Dict[str, List[str]]:
+        """
+        Check if the DataFrame already contains columns prefixed with higher
+        timeframe bar sizes (e.g. ``1 day_close``).
 
-        signal_df = aligned_data[signal_timeframe].copy()
+        Returns:
+            Dict mapping bar_size -> list of available column names, or
+            empty dict if no inline timeframe columns found.
+        """
+        found: Dict[str, List[str]] = {}
+        for bar_size in self.higher_timeframes:
+            prefix = f"{bar_size}_"
+            cols = [c for c in df.columns if c.startswith(prefix)]
+            if cols:
+                found[bar_size] = cols
+        return found
 
-        # Generate base signals using AdaptiveMultiIndicatorStrategy logic
-        # Import here to avoid circular dependency
-        from forex_strategies.adaptive_multi_indicator_strategy import AdaptiveMultiIndicatorStrategy
+    def _generate_signals_live(
+        self, df: pd.DataFrame, inline_higher_tf: Dict[str, List[str]]
+    ) -> pd.DataFrame:
+        """
+        Live-trading path: higher-timeframe data is already in the DataFrame
+        as ``{bar_size}_column`` columns provided by StrategyAdapter.
+        """
+        # Compute higher-timeframe trend from inline columns
+        higher_trend = self._get_inline_higher_trend(df, inline_higher_tf)
 
+        # Generate base signals on the primary timeframe
+        df = self._generate_base_signals(df)
+
+        # Filter by higher-timeframe trend
+        df = self._apply_trend_filter(df, higher_trend)
+
+        return df
+
+    def _get_inline_higher_trend(
+        self, df: pd.DataFrame, inline_higher_tf: Dict[str, List[str]]
+    ) -> pd.Series:
+        """
+        Determine overall trend from inline higher-timeframe columns.
+
+        Uses the same logic as ``_get_trend_from_higher_timeframe`` but
+        reads from ``{bar_size}_adx``, ``{bar_size}_plus_di``, etc.
+        """
+        trend_signals = pd.Series(0, index=df.index, dtype=float)
+
+        for bar_size in self.higher_timeframes:
+            prefix = f"{bar_size}_"
+            required = ["adx", "plus_di", "minus_di", "SMA_50", "close"]
+            col_map = {col: f"{prefix}{col}" for col in required}
+
+            # Check all required columns exist
+            if not all(col_map[c] in df.columns for c in required):
+                missing = [c for c in required if col_map[c] not in df.columns]
+                logger.debug(f"[AMTS] Skipping {bar_size} trend: missing {missing}")
+                continue
+
+            adx = df[col_map["adx"]]
+            plus_di = df[col_map["plus_di"]]
+            minus_di = df[col_map["minus_di"]]
+            sma50 = df[col_map["SMA_50"]]
+            close = df[col_map["close"]]
+
+            strong_trend = adx > 25
+            bullish = plus_di > minus_di
+            bearish = minus_di > plus_di
+            price_above_sma = close > sma50
+            price_below_sma = close < sma50
+
+            uptrend = strong_trend & bullish & price_above_sma
+            downtrend = strong_trend & bearish & price_below_sma
+
+            trend_signals = trend_signals + (uptrend.astype(int) - downtrend.astype(int))
+
+        return np.sign(trend_signals)
+
+    # ------------------------------------------------------------------
+    # Shared helpers
+    # ------------------------------------------------------------------
+
+    def _generate_base_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Run AdaptiveMultiIndicatorStrategy on the primary timeframe data."""
         base_strategy = AdaptiveMultiIndicatorStrategy(
             initial_cash=self.initial_cash,
             commission=self.commission,
@@ -359,38 +442,57 @@ class AdaptiveMultiTimeframeStrategy(MultiTimeframeStrategy):
             atr_extreme_multiplier=self.atr_extreme_multiplier,
             extrema_lookback=self.extrema_lookback,
         )
+        return base_strategy.generate_signals(df)
+
+    def _apply_trend_filter(
+        self, df: pd.DataFrame, higher_trend: pd.Series
+    ) -> pd.DataFrame:
+        """Filter buy/sell signals by the higher-timeframe trend direction."""
+        higher_trend_aligned = higher_trend.reindex(df.index, method="ffill").fillna(0)
+
+        # Only buy when higher timeframe is uptrend or neutral
+        buy_allowed = higher_trend_aligned >= 0
+        df["execute_buy"] = np.where(
+            buy_allowed & df["execute_buy"].notna(),
+            df["execute_buy"],
+            np.nan,
+        )
+
+        # Only sell when higher timeframe is downtrend or neutral
+        sell_allowed = higher_trend_aligned <= 0
+        df["execute_sell"] = np.where(
+            sell_allowed & df["execute_sell"].notna(),
+            df["execute_sell"],
+            np.nan,
+        )
+        return df
+
+    def _generate_signals_from_aligned(
+        self, df: pd.DataFrame, aligned_data: Dict[str, pd.DataFrame]
+    ) -> pd.DataFrame:
+        """Generate signals from aligned backtesting DataFrames (CSV path)."""
+        # Get trend from higher timeframes
+        higher_trend = self._get_trend_from_higher_timeframe(aligned_data)
+
+        # Use the lowest timeframe for entry signals
+        if self.lower_timeframes:
+            signal_timeframe = self.lower_timeframes[0]
+        else:
+            signal_timeframe = list(aligned_data.keys())[0]
+
+        if signal_timeframe not in aligned_data:
+            return self._generate_base_signals(df)
+
+        signal_df = aligned_data[signal_timeframe].copy()
 
         # Generate signals on the lower timeframe
-        signal_df = base_strategy.generate_signals(signal_df)
+        signal_df = self._generate_base_signals(signal_df)
 
-        # Filter signals by higher timeframe trend
-        # Only buy when higher timeframe is uptrend (1) or neutral (0)
-        # Only sell when higher timeframe is downtrend (-1) or neutral (0)
-
-        # Align higher_trend to signal_df index
-        higher_trend_aligned = higher_trend.reindex(signal_df.index, method="ffill").fillna(0)
-
-        # Filter buy signals: only when higher timeframe is not strongly bearish
-        buy_allowed = higher_trend_aligned >= 0  # Uptrend or neutral
-        signal_df["execute_buy"] = np.where(
-            buy_allowed & signal_df["execute_buy"].notna(),
-            signal_df["execute_buy"],
-            np.nan,
-        )
-
-        # Filter sell signals: only when higher timeframe is not strongly bullish
-        sell_allowed = higher_trend_aligned <= 0  # Downtrend or neutral
-        signal_df["execute_sell"] = np.where(
-            sell_allowed & signal_df["execute_sell"].notna(),
-            signal_df["execute_sell"],
-            np.nan,
-        )
+        # Filter by higher-timeframe trend
+        signal_df = self._apply_trend_filter(signal_df, higher_trend)
 
         # Map signals back to original df index
-        # The original df might have a different timeframe, so we need to align
         if len(df) != len(signal_df) or not df.index.equals(signal_df.index):
-            # Reindex signal_df to match original df index
-            # Use forward fill to propagate signals to matching timestamps
             df["execute_buy"] = signal_df["execute_buy"].reindex(df.index, method="ffill")
             df["execute_sell"] = signal_df["execute_sell"].reindex(df.index, method="ffill")
         else:

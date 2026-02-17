@@ -218,11 +218,15 @@ class OperationRunner:
         operation = await TradingOperation.get(self.operation_id)
         if operation and self.strategy_adapter:
             logger.info(f"[DATA] {tag} New bar @ {bar_data.get('timestamp')} close={bar_data.get('close')}, passing to strategy")
-            await self.strategy_adapter.on_new_bar(
-                operation.primary_bar_size,
-                bar_data,
-                indicators
-            )
+            try:
+                await self.strategy_adapter.on_new_bar(
+                    operation.primary_bar_size,
+                    bar_data,
+                    indicators
+                )
+            except Exception as e:
+                logger.warning(f"[DATA] {tag} ❌ Error in strategy adapter on_new_bar: {type(e).__name__}: {e}")
+                logger.error(f"[DATA] {tag} ❌ Strategy adapter exception details:", exc_info=True)
         else:
             logger.warning(f"[DATA] {tag} No operation or strategy adapter")
 

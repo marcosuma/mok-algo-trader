@@ -159,12 +159,15 @@ class StrategyAdapter:
                 logger.info(f"[SIGNAL] {tag} ⚪ No signal generated (HOLD)")
 
         except ValueError as e:
-            # ValueError is typically raised for missing required indicators
-            logger.error(f"[SIGNAL] {tag} ❌ STRATEGY ERROR - Missing required data: {e}")
-            logger.error(f"[SIGNAL] {tag} ❌ Available columns: {list(aligned_data.columns)}")
-            logger.error(f"[SIGNAL] {tag} ❌ Signal generation FAILED - no signal will be produced for this bar")
+            # ValueError is typically raised for missing required indicators.
+            # Log at WARNING (not just ERROR) so it is visible at the same
+            # level as the surrounding INFO messages.
+            logger.warning(f"[SIGNAL] {tag} ❌ STRATEGY ERROR - Missing required data: {e}")
+            logger.warning(f"[SIGNAL] {tag} ❌ Available columns: {list(aligned_data.columns)}")
+            logger.warning(f"[SIGNAL] {tag} ❌ Signal generation FAILED - no signal will be produced for this bar")
         except Exception as e:
-            logger.error(f"[SIGNAL] {tag} ❌ Unexpected error generating signals: {e}", exc_info=True)
+            logger.warning(f"[SIGNAL] {tag} ❌ Unexpected error generating signals: {type(e).__name__}: {e}")
+            logger.error(f"[SIGNAL] {tag} ❌ Exception details:", exc_info=True)
 
     async def _align_timeframes(self) -> Optional[pd.DataFrame]:
         """Align data from multiple timeframes"""
