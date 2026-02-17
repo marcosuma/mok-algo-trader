@@ -320,7 +320,7 @@ class DataManager:
         # Calculate indicators if calculator available
         indicators = {}
         if self.indicator_calculator:
-            df = self._buffer_to_dataframe(operation_id, bar_size)
+            df = self._buffer_to_dataframe(operation_id, bar_size, recalculate_indicators=False)
             if len(df) > 0:
                 try:
                     # TechnicalIndicators expects a DataFrame and returns it with indicators added
@@ -332,7 +332,9 @@ class DataManager:
                         # Extract indicator columns (exclude OHLCV and timestamp)
                         indicator_cols = [col for col in df_with_indicators.columns
                                          if col not in ['open', 'high', 'low', 'close', 'volume', 'timestamp']]
-                        indicators = {col: last_row[col] for col in indicator_cols if pd.notna(last_row.get(col))}
+                        # Include ALL indicator columns, even if the value is None/NaN
+                        # This ensures columns like 'local_extrema' exist even when the last value is None
+                        indicators = {col: last_row[col] for col in indicator_cols}
 
                         # Update the last bar in buffer with indicators so they're available in get_dataframe
                         if self.data_buffers[operation_id][bar_size]:
@@ -427,8 +429,18 @@ class DataManager:
         else:
             logger.debug(f"[DATA] {op_tag} No callback registered for {bar_size}")
 
-    def _buffer_to_dataframe(self, operation_id: str, bar_size: str) -> pd.DataFrame:
-        """Convert buffer to DataFrame for indicator calculation"""
+    def _buffer_to_dataframe(self, operation_id: str, bar_size: str, recalculate_indicators: bool = True) -> pd.DataFrame:
+        """Convert buffer to DataFrame for indicator calculation or signal generation.
+        
+        Args:
+            operation_id: The operation ID
+            bar_size: The bar size
+            recalculate_indicators: If True, recalculate all indicators on the full dataset.
+                                   This is important for indicators like 'local_extrema' that
+                                   need historical context to properly identify peaks/troughs.
+                                   Set to False when calling from within indicator calculation
+                                   to avoid recursion.
+        """
         bars = self.data_buffers[operation_id][bar_size]
         if not bars:
             return pd.DataFrame()
@@ -456,6 +468,16 @@ class DataManager:
 
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         df.set_index("timestamp", inplace=True)
+        
+        # Recalculate indicators on the full dataset if requested
+        # This is crucial for indicators like 'local_extrema' that need full history
+        if recalculate_indicators and self.indicator_calculator and len(df) > 0:
+            try:
+                df = self.indicator_calculator.execute(df)
+            except Exception as e:
+                short_id = str(operation_id)[-6:]
+                logger.warning(f"[DataManager] [OP:{short_id}] Error recalculating indicators: {e}")
+        
         return df
 
     async def _store_bar(
@@ -498,10 +520,19 @@ class DataManager:
     async def get_dataframe(
         self,
         operation_id: str,
-        bar_size: str
+        bar_size: str,
+        recalculate_indicators: bool = True
     ) -> pd.DataFrame:
-        """Get DataFrame for a specific bar size"""
-        return self._buffer_to_dataframe(operation_id, bar_size)
+        """Get DataFrame for a specific bar size.
+        
+        Args:
+            operation_id: The operation ID
+            bar_size: The bar size
+            recalculate_indicators: If True (default), recalculate all indicators on the
+                                   full dataset. This ensures indicators like 'local_extrema'
+                                   are properly calculated with full historical context.
+        """
+        return self._buffer_to_dataframe(operation_id, bar_size, recalculate_indicators)
 
     def is_data_stale(self, operation_id: str) -> bool:
         """Check if data for an operation is stale (no ticks received recently)"""

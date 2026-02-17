@@ -126,8 +126,9 @@ class StrategyAdapter:
 
         # Generate signals using strategy
         try:
+            logger.info(f"[SIGNAL] {tag} Calling strategy.generate_signals() with {len(aligned_data)} rows...")
             signals_df = self.strategy.generate_signals(aligned_data)
-            logger.debug(f"[SIGNAL] {tag} Signal generation completed, checking last row")
+            logger.info(f"[SIGNAL] {tag} Signal generation completed, checking last row")
 
             # Check for signals in the last row
             last_row = signals_df.iloc[-1]
@@ -145,16 +146,25 @@ class StrategyAdapter:
 
             # Check for buy signal
             if pd.notna(execute_buy):
-                logger.info(f"[SIGNAL] {tag} BUY SIGNAL @ {execute_buy:.5f}")
+                logger.info(f"[SIGNAL] {tag} 🟢 BUY SIGNAL @ {execute_buy:.5f}")
                 await self._handle_signal("BUY", execute_buy)
 
             # Check for sell signal
             if pd.notna(execute_sell):
-                logger.info(f"[SIGNAL] {tag} SELL SIGNAL @ {execute_sell:.5f}")
+                logger.info(f"[SIGNAL] {tag} 🔴 SELL SIGNAL @ {execute_sell:.5f}")
                 await self._handle_signal("SELL", execute_sell)
 
+            # Log when no signal is generated (this helps debugging)
+            if pd.isna(execute_buy) and pd.isna(execute_sell):
+                logger.info(f"[SIGNAL] {tag} ⚪ No signal generated (HOLD)")
+
+        except ValueError as e:
+            # ValueError is typically raised for missing required indicators
+            logger.error(f"[SIGNAL] {tag} ❌ STRATEGY ERROR - Missing required data: {e}")
+            logger.error(f"[SIGNAL] {tag} ❌ Available columns: {list(aligned_data.columns)}")
+            logger.error(f"[SIGNAL] {tag} ❌ Signal generation FAILED - no signal will be produced for this bar")
         except Exception as e:
-            logger.error(f"[SIGNAL] {tag} Error generating signals: {e}", exc_info=True)
+            logger.error(f"[SIGNAL] {tag} ❌ Unexpected error generating signals: {e}", exc_info=True)
 
     async def _align_timeframes(self) -> Optional[pd.DataFrame]:
         """Align data from multiple timeframes"""

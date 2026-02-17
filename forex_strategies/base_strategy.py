@@ -11,16 +11,19 @@ from abc import ABC, abstractmethod
 class BaseForexStrategy(ABC):
     """Base class for all forex trading strategies."""
 
-    def __init__(self, initial_cash=10000, commission=0.0002):
+    def __init__(self, initial_cash=10000, commission=0.0002, spread=0.0001):
         """
         Initialize strategy.
 
         Args:
             initial_cash: Starting capital
             commission: Commission rate (0.0002 = 0.02% for forex)
+            spread: Spread in price units passed to the backtesting engine
+                    (e.g. 0.0001 = 1 pip for forex). Set to 0 to disable.
         """
         self.initial_cash = initial_cash
         self.commission = commission
+        self.spread = spread
 
     @abstractmethod
     def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -75,13 +78,18 @@ class BaseForexStrategy(ABC):
                 clean_df = clean_df.reset_index(drop=True)
 
         # Run backtest
-        bt = Backtest(
-            clean_df,
-            backtest_strategy_class,
+        backtest_kwargs = dict(
             cash=self.initial_cash,
             commission=self.commission,
             exclusive_orders=True,
             finalize_trades=True,
+        )
+        if self.spread:
+            backtest_kwargs["spread"] = self.spread
+        bt = Backtest(
+            clean_df,
+            backtest_strategy_class,
+            **backtest_kwargs,
         )
         stats = bt.run()
         print("\n" + "=" * 60)

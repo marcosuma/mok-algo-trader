@@ -1011,9 +1011,24 @@ def cmd_test_forex_strategies(args: argparse.Namespace):
                 strategy_kwargs = {
                     'initial_cash': args.cash,
                     'commission': args.commission,
+                    'spread': getattr(args, 'spread', 0.0001),
                 }
 
             try:
+                # Filter kwargs to only include parameters the strategy accepts
+                import inspect
+                sig = inspect.signature(strategy_class.__init__)
+                accepted_params = set(sig.parameters.keys()) - {'self'}
+                # If strategy accepts **kwargs it will handle anything
+                has_var_keyword = any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD
+                    for p in sig.parameters.values()
+                )
+                if not has_var_keyword:
+                    strategy_kwargs = {
+                        k: v for k, v in strategy_kwargs.items()
+                        if k in accepted_params
+                    }
                 strategy_instance = strategy_class(**strategy_kwargs)
                 tester = StrategyTester([strategy_instance])
                 results_df = tester.test_all(df)
@@ -1673,6 +1688,7 @@ def _create_parser():
     p3.add_argument('--strategies', help='Comma-separated list of strategy names to test (e.g., "AdaptiveMultiIndicatorStrategy,MomentumStrategy"). If not provided, tests all available strategies.')
     p3.add_argument('--cash', type=float, default=10000, help='Initial capital (default: 10000)')
     p3.add_argument('--commission', type=float, default=0.0002, help='Commission rate (default: 0.0002 = 0.02%%)')
+    p3.add_argument('--spread', type=float, default=0.0001, help='Spread in price units (default: 0.0001 = 1 pip for forex). Set 0 to disable.')
     p3.add_argument('--plot', action='store_true', help='Plot the best performing configuration')
     p3.set_defaults(func=cmd_test_forex_strategies)
 

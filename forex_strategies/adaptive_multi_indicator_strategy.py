@@ -60,8 +60,8 @@ class AdaptiveMultiIndicatorStrategy(BaseForexStrategy):
         """Generate adaptive multi-indicator trading signals."""
         df = df.copy()
 
-        # Required indicators
-        required_cols = [
+        # Core required indicators (strategy cannot function without these)
+        core_required_cols = [
             "adx",
             "plus_di",
             "minus_di",
@@ -76,11 +76,36 @@ class AdaptiveMultiIndicatorStrategy(BaseForexStrategy):
             "close",
             "high",
             "low",
-            "local_extrema",
         ]
-        missing = [col for col in required_cols if col not in df.columns]
-        if missing:
-            raise ValueError(f"Missing required indicators: {missing}")
+        
+        # Optional indicators (strategy can work without these, with reduced functionality)
+        optional_cols = ["local_extrema"]
+        
+        missing_core = [col for col in core_required_cols if col not in df.columns]
+        if missing_core:
+            raise ValueError(f"Missing required indicators: {missing_core}")
+        
+        # Check for optional indicators
+        missing_optional = [col for col in optional_cols if col not in df.columns]
+        has_local_extrema = "local_extrema" in df.columns
+        
+        # Also check if local_extrema has any valid (non-None) values
+        if has_local_extrema:
+            # Check if we have at least some valid local extrema values
+            valid_extrema_count = df["local_extrema"].notna().sum()
+            if valid_extrema_count == 0:
+                has_local_extrema = False
+        
+        if missing_optional or not has_local_extrema:
+            # Log warning but continue - strategy will work with reduced functionality
+            import logging
+            logger = logging.getLogger(__name__)
+            if missing_optional:
+                logger.warning(f"[AdaptiveMultiIndicatorStrategy] Optional indicators missing: {missing_optional}. "
+                              f"Support/resistance features will be disabled.")
+            elif not has_local_extrema:
+                logger.warning(f"[AdaptiveMultiIndicatorStrategy] local_extrema has no valid values. "
+                              f"Support/resistance features will be disabled.")
 
         # Calculate rolling average ATR for volatility filter
         df["atr_avg"] = df["atr"].rolling(window=20, min_periods=1).mean()
@@ -137,34 +162,47 @@ class AdaptiveMultiIndicatorStrategy(BaseForexStrategy):
             (df["close"] >= df["bollinger_up"] * 0.998).fillna(False)
         )  # Within 0.2% of upper band
 
-        # Local extrema analysis
-        from local_extrema.local_extrema import LOCAL_MAX, LOCAL_MIN
+        # Local extrema analysis (optional - provides support/resistance features)
+        if has_local_extrema:
+            from local_extrema.local_extrema import LOCAL_MAX, LOCAL_MIN
 
-        df["is_local_max"] = (df["local_extrema"] == LOCAL_MAX).fillna(False)
-        df["is_local_min"] = (df["local_extrema"] == LOCAL_MIN).fillna(False)
+            df["is_local_max"] = (df["local_extrema"] == LOCAL_MAX).fillna(False)
+            df["is_local_min"] = (df["local_extrema"] == LOCAL_MIN).fillna(False)
 
-        # Find recent local extrema levels
-        df["recent_local_max"] = df["high"].where(df["is_local_max"]).ffill()
-        df["recent_local_min"] = df["low"].where(df["is_local_min"]).ffill()
+            # Find recent local extrema levels
+            df["recent_local_max"] = df["high"].where(df["is_local_max"]).ffill()
+            df["recent_local_min"] = df["low"].where(df["is_local_min"]).ffill()
 
-        # Check if price is breaking above recent local max or below recent local min
-        df["breaking_above_resistance"] = (
-            (df["close"] > df["recent_local_max"].shift(1)).fillna(False)
-        )
-        df["breaking_below_support"] = (
-            (df["close"] < df["recent_local_min"].shift(1)).fillna(False)
-        )
+            # Check if price is breaking above recent local max or below recent local min
+            df["breaking_above_resistance"] = (
+                (df["close"] > df["recent_local_max"].shift(1)).fillna(False)
+            )
+            df["breaking_below_support"] = (
+                (df["close"] < df["recent_local_min"].shift(1)).fillna(False)
+            )
 
-        # Check if price is near support/resistance
-        # Handle division by zero and NaN values
-        price_diff_max = abs(df["close"] - df["recent_local_max"].shift(1))
-        price_diff_min = abs(df["close"] - df["recent_local_min"].shift(1))
-        df["near_support"] = (
-            (price_diff_min / df["close"].replace(0, np.nan) < 0.005).fillna(False)
-        )  # Within 0.5% of support
-        df["near_resistance"] = (
-            (price_diff_max / df["close"].replace(0, np.nan) < 0.005).fillna(False)
-        )  # Within 0.5% of resistance
+            # Check if price is near support/resistance
+            # Handle division by zero and NaN values
+            price_diff_max = abs(df["close"] - df["recent_local_max"].shift(1))
+            price_diff_min = abs(df["close"] - df["recent_local_min"].shift(1))
+            df["near_support"] = (
+                (price_diff_min / df["close"].replace(0, np.nan) < 0.005).fillna(False)
+            )  # Within 0.5% of support
+            df["near_resistance"] = (
+                (price_diff_max / df["close"].replace(0, np.nan) < 0.005).fillna(False)
+            )  # Within 0.5% of resistance
+        else:
+            # Fallback: disable support/resistance features
+            # Use Bollinger bands as proxy for support/resistance instead
+            df["is_local_max"] = False
+            df["is_local_min"] = False
+            df["recent_local_max"] = np.nan
+            df["recent_local_min"] = np.nan
+            df["breaking_above_resistance"] = False  # Will rely on other conditions
+            df["breaking_below_support"] = False  # Will rely on other conditions
+            # Use Bollinger bands proximity as proxy for near support/resistance
+            df["near_support"] = df["near_lower_band"]
+            df["near_resistance"] = df["near_upper_band"]
 
         # ===== TREND-FOLLOWING BUY SIGNALS =====
         trend_buy_conditions = (
