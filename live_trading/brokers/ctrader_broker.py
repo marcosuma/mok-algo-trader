@@ -43,6 +43,9 @@ except ImportError:
     TcpProtocol = None
     Auth = None
     EndPoints = None
+    reactor = None  # type: ignore[assignment]
+    defer = None  # type: ignore[assignment]
+    Deferred = None  # type: ignore[assignment,misc]
 
 from live_trading.brokers.base_broker import BaseBroker
 from live_trading.config import config
@@ -87,6 +90,7 @@ class CTraderBroker(BaseBroker):
         self._symbol_cache: Dict[str, int] = {}  # asset -> symbol_id
         self._symbol_id_to_name: Dict[int, str] = {}  # symbol_id -> asset (reverse lookup)
         self._symbol_digits: Dict[int, int] = {}  # symbol_id -> digits (decimal places)
+        self._symbol_digits_verified: set = set()  # symbol_ids with digits fetched from full symbol info
         self._order_callbacks: Dict[str, Callable] = {}  # order_id -> callback
         self._pending_order_futures: Dict[str, Any] = {}  # clientMsgId -> (asyncio.Future, loop, order_status_callback)
         self._reactor_thread: Optional[threading.Thread] = None
@@ -172,6 +176,16 @@ class CTraderBroker(BaseBroker):
         digits = self._symbol_digits.get(symbol_id, 5)  # Default to 5 for forex
         conversion_factor = 10 ** digits
         return raw_price / conversion_factor
+
+    def _round_price_for_symbol(self, price: float, symbol_id: int) -> float:
+        """
+        Round a price to the number of decimal places allowed by the symbol.
+
+        cTrader rejects orders whose price has more decimal digits than
+        the symbol permits (e.g. XAUUSD allows 2 digits).
+        """
+        digits = self._symbol_digits.get(symbol_id, 5)
+        return round(price, digits)
 
     def _start_reactor(self):
         """Start Twisted reactor in a separate thread"""
@@ -785,20 +799,26 @@ class CTraderBroker(BaseBroker):
         self._positions_cache = positions_list
 
     def _handle_symbols_list_res(self, response):  # type: ignore
-        """Handle symbols list response"""
+        """Handle symbols list response (light or full symbols)."""
         try:
             if hasattr(response, 'symbol'):
                 for symbol in response.symbol:
-                    symbol_asset = self._convert_symbol_to_asset(symbol.symbolName)
-                    self._symbol_cache[symbol_asset] = symbol.symbolId
-                    self._symbol_id_to_name[symbol.symbolId] = symbol_asset  # Reverse lookup
+                    # Light symbols have symbolName; full symbols (ProtoOASymbol) don't.
+                    symbol_name = getattr(symbol, 'symbolName', None)
+                    if symbol_name:
+                        symbol_asset = self._convert_symbol_to_asset(symbol_name)
+                        self._symbol_cache[symbol_asset] = symbol.symbolId
+                        self._symbol_id_to_name[symbol.symbolId] = symbol_asset
 
-                    # Store digits for price conversion
-                    # cTrader symbols have a 'digits' field indicating decimal places
-                    digits = getattr(symbol, 'digits', 5)  # Default to 5 for forex
-                    self._symbol_digits[symbol.symbolId] = digits
+                    # Store digits for price conversion if present.
+                    digits = getattr(symbol, 'digits', None)
+                    if digits is not None:
+                        self._symbol_digits[symbol.symbolId] = digits
+                        self._symbol_digits_verified.add(symbol.symbolId)
+                    elif symbol.symbolId not in self._symbol_digits:
+                        self._symbol_digits[symbol.symbolId] = 5  # Fallback for forex
 
-                    logger.debug(f"Cached symbol: {symbol_asset} -> {symbol.symbolId} (digits={digits})")
+                    logger.debug(f"Cached symbol: {symbol.symbolId} (digits={self._symbol_digits.get(symbol.symbolId)})")
         except Exception as e:
             logger.error(f"Error handling symbols list: {e}", exc_info=True)
 
@@ -1337,6 +1357,73 @@ class CTraderBroker(BaseBroker):
         """Get asset name from symbol ID (reverse lookup)"""
         return self._symbol_id_to_name.get(symbol_id, f"SYMBOL_{symbol_id}")
 
+    async def _ensure_symbol_digits(self, symbol_id: int) -> None:
+        """
+        Fetch full symbol details to get the accurate 'digits' value.
+
+        The light symbol list (ProtoOASymbolsListReq) does not include digits,
+        so we must request it via ProtoOASymbolByIdReq. Results are cached.
+        """
+        if symbol_id in self._symbol_digits_verified:
+            return
+
+        if not self.client or not self.authenticated:
+            return
+
+        loop = asyncio.get_event_loop()
+        future = loop.create_future()
+
+        def on_success(response):
+            try:
+                extracted = Protobuf.extract(response)
+                if hasattr(extracted, 'symbol') and extracted.symbol:
+                    sym = extracted.symbol[0]
+                    digits = getattr(sym, 'digits', None)
+                    if digits is not None:
+                        old = self._symbol_digits.get(symbol_id)
+                        self._symbol_digits[symbol_id] = digits
+                        self._symbol_digits_verified.add(symbol_id)
+                        asset = self._symbol_id_to_name.get(symbol_id, symbol_id)
+                        if old != digits:
+                            logger.info(
+                                f"[SYMBOL] Updated digits for {asset} (ID {symbol_id}): "
+                                f"{old} -> {digits}"
+                            )
+                if not future.done():
+                    loop.call_soon_threadsafe(future.set_result, True)
+            except Exception as e:
+                logger.error(f"Error processing symbol details: {e}", exc_info=True)
+                if not future.done():
+                    loop.call_soon_threadsafe(future.set_result, False)
+
+        def on_error(failure):
+            logger.warning(f"Failed to fetch symbol details for {symbol_id}: {failure}")
+            if not future.done():
+                loop.call_soon_threadsafe(future.set_result, False)
+
+        def send_request():
+            try:
+                if self.client:
+                    request = ProtoOASymbolByIdReq()
+                    request.ctidTraderAccountId = self.account_id
+                    request.symbolId.append(symbol_id)
+                    d = self.client.send(request)
+                    d.addCallbacks(on_success, on_error)
+                else:
+                    if not future.done():
+                        loop.call_soon_threadsafe(future.set_result, False)
+            except Exception as e:
+                logger.error(f"Error sending symbol-by-id request: {e}", exc_info=True)
+                if not future.done():
+                    loop.call_soon_threadsafe(future.set_result, False)
+
+        reactor.callFromThread(send_request)
+
+        try:
+            await asyncio.wait_for(future, timeout=10.0)
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout fetching symbol details for {symbol_id}")
+
     async def subscribe_market_data(
         self,
         asset: str,
@@ -1661,6 +1748,9 @@ class CTraderBroker(BaseBroker):
             logger.error(f"[ORDER] Could not find symbol ID for {asset}")
             return ""
 
+        # Fetch accurate digits for price rounding
+        await self._ensure_symbol_digits(symbol_id)
+
         # Create order request
         request = ProtoOANewOrderReq()
         request.ctidTraderAccountId = self.account_id
@@ -1678,11 +1768,11 @@ class CTraderBroker(BaseBroker):
         elif order_type == "LIMIT":
             request.orderType = ProtoOAOrderType.LIMIT
             if price:
-                request.limitPrice = price
+                request.limitPrice = self._round_price_for_symbol(price, symbol_id)
         elif order_type == "STOP":
             request.orderType = ProtoOAOrderType.STOP
             if price:
-                request.stopPrice = price
+                request.stopPrice = self._round_price_for_symbol(price, symbol_id)
         else:
             logger.error(f"[ORDER] Unsupported order type: {order_type}")
             return ""
@@ -1694,20 +1784,21 @@ class CTraderBroker(BaseBroker):
 
         # Add stop loss and take profit (cTrader expects actual price values)
         if stop_loss:
-            request.stopLoss = stop_loss
+            request.stopLoss = self._round_price_for_symbol(stop_loss, symbol_id)
         if take_profit:
-            request.takeProfit = take_profit
+            request.takeProfit = self._round_price_for_symbol(take_profit, symbol_id)
 
+        digits = self._symbol_digits.get(symbol_id, 5)
         # Log the full request details for debugging
         logger.info(
             f"[ORDER] Request details: "
             f"accountId={self.account_id}, "
-            f"symbolId={symbol_id}, "
+            f"symbolId={symbol_id} (digits={digits}), "
             f"tradeSide={action}, "
             f"orderType={order_type}, "
             f"volume={volume} (from {quantity} lots), "
-            f"stopLoss={stop_loss}, "
-            f"takeProfit={take_profit}, "
+            f"stopLoss={request.stopLoss if stop_loss else None} (raw={stop_loss}), "
+            f"takeProfit={request.takeProfit if take_profit else None} (raw={take_profit}), "
             f"price={price}"
         )
         logger.info(f"[ORDER] Full protobuf request: {request}")

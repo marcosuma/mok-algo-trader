@@ -24,7 +24,7 @@ except ImportError:
 # Try to import cTrader broker, but make it optional
 try:
     from .ctrader_broker import CTraderBroker
-except ImportError:
+except (ImportError, NameError):
     CTraderBroker = None
 
 # Build __all__ list based on what's available
