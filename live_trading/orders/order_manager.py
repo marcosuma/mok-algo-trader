@@ -121,6 +121,11 @@ class OrderManager:
         except RuntimeError:
             event_loop = None
 
+        # Capture the order's DB _id so the callback can always find it,
+        # even before broker_order_id is saved (avoids a race condition where
+        # the broker fires the callback before we write broker_order_id to DB).
+        order_db_id = order.id
+
         def order_status_callback(status_data: Dict[str, Any]):
             """Callback to update order status in database when broker sends updates"""
             from datetime import datetime
@@ -162,36 +167,47 @@ class OrderManager:
             # Schedule async database update
             async def update_order():
                 try:
-                    # Find order by broker_order_id
-                    order_to_update = await Order.find_one(
-                        Order.broker_order_id == broker_order_id
-                    )
-                    if order_to_update:
-                        old_status = order_to_update.status
-                        order_to_update.status = new_status
-                        order_to_update.filled_quantity = filled
-                        if avg_fill_price > 0:
-                            order_to_update.avg_fill_price = avg_fill_price
-                        if new_status == "FILLED" and not order_to_update.filled_at:
-                            order_to_update.filled_at = datetime.utcnow()
-                        await order_to_update.save()
+                    # Look up by stable _id — broker_order_id may not be saved
+                    # to the DB yet when fast execution events arrive.
+                    order_to_update = await Order.get(order_db_id)
+                    if not order_to_update:
+                        logger.error(
+                            f"[ORDER] {op_tag} Order {order_db_id} not found in DB "
+                            f"during status callback ({broker_status} -> {new_status})"
+                        )
+                        return
 
-                        logger.info(f"[ORDER] {op_tag} DB updated: order {order_to_update.id} ({old_status} -> {new_status})")
+                    # Also backfill broker_order_id from the callback payload
+                    # in case the main flow hasn't saved it yet.
+                    callback_order_id = status_data.get("order_id")
+                    if callback_order_id and not order_to_update.broker_order_id:
+                        order_to_update.broker_order_id = str(callback_order_id)
 
-                        # If order is filled, trigger on_order_filled
-                        if new_status == "FILLED":
-                            logger.info(f"[ORDER] {op_tag} FILLED! {signal_type} @ {avg_fill_price} (qty: {filled})")
-                            await self.on_order_filled(
-                                order_to_update.id,
-                                {
-                                    "filled": filled,
-                                    "avg_fill_price": avg_fill_price
-                                }
-                            )
-                        elif new_status == "REJECTED":
-                            logger.error(f"[ORDER] {op_tag} REJECTED! {signal_type} - Reason: {status_data.get('reason', 'unknown')}")
-                        elif new_status == "CANCELLED":
-                            logger.warning(f"[ORDER] {op_tag} CANCELLED: {signal_type}")
+                    old_status = order_to_update.status
+                    order_to_update.status = new_status
+                    order_to_update.filled_quantity = filled
+                    if avg_fill_price > 0:
+                        order_to_update.avg_fill_price = avg_fill_price
+                    if new_status == "FILLED" and not order_to_update.filled_at:
+                        order_to_update.filled_at = datetime.utcnow()
+                    await order_to_update.save()
+
+                    logger.info(f"[ORDER] {op_tag} DB updated: order {order_to_update.id} ({old_status} -> {new_status})")
+
+                    # If order is filled, trigger on_order_filled
+                    if new_status == "FILLED":
+                        logger.info(f"[ORDER] {op_tag} FILLED! {signal_type} @ {avg_fill_price} (qty: {filled})")
+                        await self.on_order_filled(
+                            order_to_update.id,
+                            {
+                                "filled": filled,
+                                "avg_fill_price": avg_fill_price
+                            }
+                        )
+                    elif new_status == "REJECTED":
+                        logger.error(f"[ORDER] {op_tag} REJECTED! {signal_type} - Reason: {status_data.get('reason', 'unknown')}")
+                    elif new_status == "CANCELLED":
+                        logger.warning(f"[ORDER] {op_tag} CANCELLED: {signal_type}")
                 except Exception as e:
                     logger.error(f"[ORDER] {op_tag} Error updating order status in callback: {e}", exc_info=True)
 
