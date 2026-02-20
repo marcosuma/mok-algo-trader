@@ -1713,11 +1713,17 @@ class CTraderBroker(BaseBroker):
                  1.00 lots = 100,000 volume units
         """
         UNITS_PER_LOT = 100_000
+        MAX_VOLUME = 10_000_000  # cTrader max = 100 lots
         volume = int(round(quantity * UNITS_PER_LOT))
-        # Ensure minimum volume (0.01 lots = 1000 units)
         if volume < 1000:
             logger.warning(f"[ORDER] Volume {volume} too small (min 1000 = 0.01 lots), using minimum")
             volume = 1000
+        if volume > MAX_VOLUME:
+            logger.warning(
+                f"[ORDER] Volume {volume} ({quantity:.2f} lots) exceeds max {MAX_VOLUME} "
+                f"(100 lots), clamping. Check position sizing logic."
+            )
+            volume = MAX_VOLUME
         return volume
 
     async def place_order(

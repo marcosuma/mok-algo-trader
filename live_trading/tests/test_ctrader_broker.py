@@ -70,3 +70,16 @@ class TestConvertQuantityToVolume:
     def test_fractional_lot(self):
         broker = self._make_broker()
         assert broker._convert_quantity_to_volume(0.1) == 10_000
+
+    def test_max_volume_clamped(self):
+        """Regression: absurd lot sizes must be clamped to prevent broker rejection."""
+        broker = self._make_broker()
+        assert broker._convert_quantity_to_volume(313_199.0) == 10_000_000
+
+    def test_100_lots_at_boundary(self):
+        broker = self._make_broker()
+        assert broker._convert_quantity_to_volume(100.0) == 10_000_000
+
+    def test_99_lots_below_boundary(self):
+        broker = self._make_broker()
+        assert broker._convert_quantity_to_volume(99.0) == 9_900_000

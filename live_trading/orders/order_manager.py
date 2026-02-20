@@ -953,46 +953,48 @@ class OrderManager:
         stop_loss: Optional[float]
     ) -> float:
         """
-        Calculate default order quantity based on operation capital and risk management.
+        Calculate default order quantity in **lots** based on risk management.
 
-        Uses a percentage of available capital (e.g., 1-2% risk per trade) or fixed position size.
-
-        Args:
-            operation: Trading operation
-            entry_price: Entry price
-            stop_loss: Stop loss price (for risk calculation)
+        The broker's place_order expects lots (1 lot = UNITS_PER_LOT currency
+        units).  risk_amount / risk_per_unit gives currency units, so we must
+        convert to lots before returning.
 
         Returns:
-            Default quantity
+            Quantity in lots (e.g. 0.5 = half a standard lot)
         """
+        UNITS_PER_LOT = 100_000
+
         try:
-            # Use 1% of current capital as default risk per trade
             risk_per_trade_pct = 0.01  # 1% of capital
 
             if entry_price > 0:
                 if stop_loss and stop_loss > 0:
-                    # Calculate quantity based on risk
-                    # Risk amount = capital * risk_per_trade_pct
                     risk_amount = operation.current_capital * risk_per_trade_pct
-
-                    # Risk per unit = |entry_price - stop_loss|
                     risk_per_unit = abs(entry_price - stop_loss)
 
                     if risk_per_unit > 0:
-                        quantity = risk_amount / risk_per_unit
-                        logger.debug(f"Calculated quantity based on risk: {quantity} (risk: {risk_amount}, risk/unit: {risk_per_unit})")
-                        return quantity
+                        units = risk_amount / risk_per_unit
+                        lots = units / UNITS_PER_LOT
+                        logger.info(
+                            f"[SIZING] Risk-based: capital={operation.current_capital}, "
+                            f"risk={risk_amount}, risk/unit={risk_per_unit:.6f}, "
+                            f"units={units:.0f}, lots={lots:.4f}"
+                        )
+                        return lots
 
-                # Fallback: Use fixed percentage of capital
-                # For forex, use 1% of capital as position size
-                position_size = operation.current_capital * 0.01
-                quantity = position_size / entry_price if entry_price > 0 else 1.0
-                logger.debug(f"Calculated quantity based on capital: {quantity} (capital: {operation.current_capital}, entry: {entry_price})")
-                return quantity
+                # Fallback: fixed fraction of capital expressed in lots
+                position_value = operation.current_capital * 0.01
+                units = position_value / entry_price if entry_price > 0 else UNITS_PER_LOT
+                lots = units / UNITS_PER_LOT
+                logger.info(
+                    f"[SIZING] Capital-based fallback: lots={lots:.4f} "
+                    f"(capital={operation.current_capital}, entry={entry_price})"
+                )
+                return lots
 
-            # Final fallback
-            return 1.0
+            # Final fallback: minimum lot size
+            return 0.01
         except Exception as e:
             logger.error(f"Error calculating default quantity: {e}", exc_info=True)
-            return 1.0
+            return 0.01
 

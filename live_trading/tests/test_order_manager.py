@@ -1,9 +1,5 @@
 """
-Tests for OrderManager order status callback logic.
-
-Verifies that the callback uses the stable order _id (not broker_order_id)
-to find and update orders, avoiding the race condition where the broker fires
-the callback before broker_order_id is persisted to the database.
+Tests for OrderManager order status callback logic and position sizing.
 """
 import asyncio
 import pytest
@@ -20,6 +16,81 @@ def order_manager():
     broker = AsyncMock()
     journal = AsyncMock()
     return OrderManager(broker=broker, journal_manager=journal)
+
+
+class TestCalculateDefaultQuantity:
+    """
+    Regression: _calculate_default_quantity must return lots, not raw units.
+    313k units was wrongly treated as 313k lots → 31 billion volume units.
+    """
+
+    @pytest.mark.asyncio
+    async def test_returns_lots_not_units(self, order_manager):
+        """EUR-USD: 100k capital, 1% risk, ~3 pip SL → should be ~31 lots, not 3.1M."""
+        operation = MagicMock()
+        operation.current_capital = 100_000.0
+
+        lots = await order_manager._calculate_default_quantity(
+            operation=operation,
+            entry_price=1.17712,
+            stop_loss=1.17680,
+        )
+
+        # risk = 1000, risk/unit = 0.00032, units = 3,125,000, lots = 31.25
+        assert 25.0 < lots < 40.0, f"Expected ~31 lots, got {lots}"
+
+    @pytest.mark.asyncio
+    async def test_small_account_returns_small_lots(self, order_manager):
+        """1k account with 3-pip SL should produce ~0.3 lots."""
+        operation = MagicMock()
+        operation.current_capital = 1_000.0
+
+        lots = await order_manager._calculate_default_quantity(
+            operation=operation,
+            entry_price=1.17712,
+            stop_loss=1.17680,
+        )
+        assert 0.1 < lots < 1.0, f"Expected ~0.3 lots, got {lots}"
+
+    @pytest.mark.asyncio
+    async def test_fallback_without_stop_loss(self, order_manager):
+        """Without SL, falls back to capital-based sizing — still in lots."""
+        operation = MagicMock()
+        operation.current_capital = 100_000.0
+
+        lots = await order_manager._calculate_default_quantity(
+            operation=operation,
+            entry_price=1.17712,
+            stop_loss=None,
+        )
+        # 1% of 100k = 1000 value, units = 1000/1.177 ≈ 849, lots = 0.00849
+        assert lots < 1.0, f"Fallback lots should be < 1, got {lots}"
+
+    @pytest.mark.asyncio
+    async def test_zero_price_returns_minimum(self, order_manager):
+        operation = MagicMock()
+        operation.current_capital = 100_000.0
+
+        lots = await order_manager._calculate_default_quantity(
+            operation=operation,
+            entry_price=0.0,
+            stop_loss=None,
+        )
+        assert lots == 0.01
+
+    @pytest.mark.asyncio
+    async def test_gold_sizing(self, order_manager):
+        """XAU-USD at 2000 with $2 SL and 100k account."""
+        operation = MagicMock()
+        operation.current_capital = 100_000.0
+
+        lots = await order_manager._calculate_default_quantity(
+            operation=operation,
+            entry_price=2000.0,
+            stop_loss=1998.0,
+        )
+        # risk = 1000, risk/unit = 2.0, units = 500, lots = 0.005
+        assert lots < 0.1, f"Gold lots should be small, got {lots}"
 
 
 class TestOrderStatusCallbackUsesStableId:
