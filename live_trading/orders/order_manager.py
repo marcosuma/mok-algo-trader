@@ -14,6 +14,10 @@ from live_trading.models.trading_operation import TradingOperation
 from live_trading.models.market_data import MarketData
 from live_trading.brokers.base_broker import BaseBroker
 from live_trading.journal.journal_manager import JournalManager
+from forex_strategies.risk_management import (
+    calculate_stop_loss as _calc_sl,
+    calculate_take_profit as _calc_tp,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -276,42 +280,28 @@ class OrderManager:
         """
         Calculate stop loss price based on operation configuration.
 
-        Args:
-            operation_id: Trading operation ID
-            entry_price: Entry price
-            position_type: 'LONG' or 'SHORT'
-
-        Returns:
-            Stop loss price
+        Delegates the pure calculation to ``forex_strategies.risk_management``
+        so backtesting and live trading share identical logic.
         """
         operation = await TradingOperation.get(operation_id)
         if not operation:
             raise ValueError(f"Operation {operation_id} not found")
 
-        stop_loss_type = operation.stop_loss_type
-        stop_loss_value = operation.stop_loss_value
-
-        if stop_loss_type == "ATR":
-            # Get ATR value from latest bar
+        atr_value = None
+        if operation.stop_loss_type == "ATR":
             atr_value = await self._get_atr_value(operation_id, operation.primary_bar_size)
             if atr_value is None or atr_value == 0.0:
                 logger.warning(f"Could not get ATR value for operation {operation_id}, using default 0.001")
                 atr_value = 0.001
-            stop_distance = stop_loss_value * atr_value
-        elif stop_loss_type == "PERCENTAGE":
-            stop_distance = stop_loss_value * entry_price
-        elif stop_loss_type == "FIXED":
-            stop_distance = stop_loss_value
-        else:
-            raise ValueError(f"Unknown stop_loss_type: {stop_loss_type}")
 
-        # Calculate stop loss price
-        if position_type == "LONG":
-            stop_loss = entry_price - stop_distance
-        else:  # SHORT
-            stop_loss = entry_price + stop_distance
-
-        return stop_loss
+        result = _calc_sl(
+            entry_price=entry_price,
+            position_type=position_type,
+            sl_type=operation.stop_loss_type,
+            sl_value=operation.stop_loss_value,
+            atr_value=atr_value,
+        )
+        return result if result is not None else entry_price
 
     async def calculate_take_profit(
         self,
@@ -323,65 +313,29 @@ class OrderManager:
         """
         Calculate take profit price based on operation configuration.
 
-        Args:
-            operation_id: Trading operation ID
-            entry_price: Entry price
-            stop_loss_price: Calculated stop loss price
-            position_type: 'LONG' or 'SHORT'
-
-        Returns:
-            Take profit price
+        Delegates the pure calculation to ``forex_strategies.risk_management``
+        so backtesting and live trading share identical logic.
         """
         operation = await TradingOperation.get(operation_id)
         if not operation:
             raise ValueError(f"Operation {operation_id} not found")
 
-        take_profit_type = operation.take_profit_type
-        take_profit_value = operation.take_profit_value
-
-        if take_profit_type == "RISK_REWARD":
-            # Calculate risk distance
-            if position_type == "LONG":
-                risk_distance = entry_price - stop_loss_price
-            else:  # SHORT
-                risk_distance = stop_loss_price - entry_price
-
-            # Take profit = entry ± (risk * reward_ratio)
-            profit_distance = risk_distance * take_profit_value
-
-            if position_type == "LONG":
-                take_profit = entry_price + profit_distance
-            else:  # SHORT
-                take_profit = entry_price - profit_distance
-
-        elif take_profit_type == "ATR":
-            # Get ATR value from latest bar
+        atr_value = None
+        if operation.take_profit_type == "ATR":
             atr_value = await self._get_atr_value(operation_id, operation.primary_bar_size)
             if atr_value is None or atr_value == 0.0:
                 logger.warning(f"Could not get ATR value for operation {operation_id}, using default 0.001")
                 atr_value = 0.001
-            profit_distance = take_profit_value * atr_value
 
-            if position_type == "LONG":
-                take_profit = entry_price + profit_distance
-            else:  # SHORT
-                take_profit = entry_price - profit_distance
-
-        elif take_profit_type == "PERCENTAGE":
-            profit_distance = take_profit_value * entry_price
-
-            if position_type == "LONG":
-                take_profit = entry_price + profit_distance
-            else:  # SHORT
-                take_profit = entry_price - profit_distance
-
-        elif take_profit_type == "FIXED":
-            take_profit = take_profit_value
-
-        else:
-            raise ValueError(f"Unknown take_profit_type: {take_profit_type}")
-
-        return take_profit
+        result = _calc_tp(
+            entry_price=entry_price,
+            stop_loss_price=stop_loss_price,
+            position_type=position_type,
+            tp_type=operation.take_profit_type,
+            tp_value=operation.take_profit_value,
+            atr_value=atr_value,
+        )
+        return result if result is not None else entry_price
 
     async def on_order_filled(
         self,

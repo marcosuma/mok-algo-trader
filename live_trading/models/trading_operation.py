@@ -25,6 +25,10 @@ class TradingOperation(Document):
     take_profit_type: str = Field(default="RISK_REWARD", description="Take profit type: 'ATR', 'PERCENTAGE', 'FIXED', 'RISK_REWARD'")
     take_profit_value: float = Field(default=2.0, description="Take profit value (multiplier for ATR/RISK_REWARD, percentage for PERCENTAGE, absolute for FIXED)")
 
+    # Pyramiding
+    allow_pyramiding: bool = Field(default=False, description="Allow multiple same-direction entries")
+    max_pyramid_entries: int = Field(default=1, description="Max concurrent entries in the same direction")
+
     # Crash recovery config
     crash_recovery_mode: str = Field(default="CLOSE_ALL", description="Crash recovery mode: 'CLOSE_ALL', 'RESUME', 'EMERGENCY_EXIT'")
     emergency_stop_loss_pct: float = Field(default=0.05, description="Emergency exit threshold (e.g., 0.05 for 5%)")

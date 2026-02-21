@@ -11,7 +11,23 @@ from abc import ABC, abstractmethod
 class BaseForexStrategy(ABC):
     """Base class for all forex trading strategies."""
 
-    def __init__(self, initial_cash=10000, commission=0.0002, spread=0.0001):
+    def __init__(
+        self,
+        initial_cash=10000,
+        commission=0.0002,
+        spread=0.0001,
+        # Risk management — mirrors TradingOperation fields so backtesting
+        # uses the same SL/TP logic as live trading.
+        stop_loss_type="NONE",
+        stop_loss_value=1.5,
+        take_profit_type="NONE",
+        take_profit_value=2.0,
+        # Pyramiding
+        allow_pyramiding=False,
+        max_pyramid_entries=1,
+        # Slippage (added on top of spread)
+        slippage=0.0,
+    ):
         """
         Initialize strategy.
 
@@ -20,10 +36,30 @@ class BaseForexStrategy(ABC):
             commission: Commission rate (0.0002 = 0.02% for forex)
             spread: Spread in price units passed to the backtesting engine
                     (e.g. 0.0001 = 1 pip for forex). Set to 0 to disable.
+            stop_loss_type: 'ATR', 'PERCENTAGE', 'FIXED', or 'NONE'
+            stop_loss_value: Multiplier for ATR, fraction for PERCENTAGE,
+                distance for FIXED.
+            take_profit_type: 'RISK_REWARD', 'ATR', 'PERCENTAGE', 'FIXED',
+                or 'NONE'
+            take_profit_value: Ratio for RISK_REWARD, multiplier for ATR,
+                fraction for PERCENTAGE, absolute for FIXED.
+            allow_pyramiding: When True, multiple same-direction entries are
+                allowed up to *max_pyramid_entries*.
+            max_pyramid_entries: Maximum concurrent entries in the same
+                direction (only relevant when *allow_pyramiding* is True).
+            slippage: Additional cost in price units added to spread to
+                approximate execution slippage.
         """
         self.initial_cash = initial_cash
         self.commission = commission
         self.spread = spread
+        self.stop_loss_type = stop_loss_type
+        self.stop_loss_value = stop_loss_value
+        self.take_profit_type = take_profit_type
+        self.take_profit_value = take_profit_value
+        self.allow_pyramiding = allow_pyramiding
+        self.max_pyramid_entries = max_pyramid_entries
+        self.slippage = slippage
 
     @abstractmethod
     def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -78,20 +114,29 @@ class BaseForexStrategy(ABC):
                 clean_df = clean_df.reset_index(drop=True)
 
         # Run backtest
+        effective_spread = (self.spread or 0) + self.slippage
         backtest_kwargs = dict(
             cash=self.initial_cash,
             commission=self.commission,
-            exclusive_orders=True,
+            exclusive_orders=not self.allow_pyramiding,
             finalize_trades=True,
         )
-        if self.spread:
-            backtest_kwargs["spread"] = self.spread
+        if effective_spread:
+            backtest_kwargs["spread"] = effective_spread
         bt = Backtest(
             clean_df,
             backtest_strategy_class,
             **backtest_kwargs,
         )
-        stats = bt.run()
+        strategy_params = dict(
+            stop_loss_type=self.stop_loss_type,
+            stop_loss_value=self.stop_loss_value,
+            take_profit_type=self.take_profit_type,
+            take_profit_value=self.take_profit_value,
+            allow_pyramiding=self.allow_pyramiding,
+            max_pyramid_entries=self.max_pyramid_entries,
+        )
+        stats = bt.run(**strategy_params)
         print("\n" + "=" * 60)
         print(f"Strategy: {self.__class__.__name__}")
         print("=" * 60)

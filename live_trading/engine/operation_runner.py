@@ -1003,6 +1003,8 @@ class OperationRunner:
         price: float
     ):
         """Handle trading signal from strategy"""
+        from live_trading.models.position import Position
+
         tag = getattr(self, '_op_tag', f"[OP:{str(self.operation_id)[-6:]}]")
         operation = await TradingOperation.get(self.operation_id)
         if not operation:
@@ -1012,6 +1014,25 @@ class OperationRunner:
         if operation.status != "active":
             logger.warning(f"[ORDER] {tag} Status '{operation.status}' - order blocked: {signal_type}")
             return
+
+        # Check existing position to decide if this signal should be acted on
+        open_position = await Position.find_one(
+            Position.operation_id == self.operation_id,
+            Position.closed_at == None,  # noqa: E711
+        )
+
+        if open_position:
+            is_long = open_position.quantity > 0
+            same_direction = (
+                (is_long and signal_type == "BUY")
+                or (not is_long and signal_type == "SELL")
+            )
+            if same_direction and not operation.allow_pyramiding:
+                logger.info(
+                    f"[ORDER] {tag} Duplicate {signal_type} blocked "
+                    f"(already {'LONG' if is_long else 'SHORT'}, pyramiding disabled)"
+                )
+                return
 
         # Place order
         try:

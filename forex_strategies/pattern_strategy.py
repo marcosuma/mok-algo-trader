@@ -40,11 +40,14 @@ class PatternStrategy(BaseForexStrategy):
         series = pd.to_numeric(df[price_column], errors="coerce").copy()
         series = series.ffill().bfill()
 
-        # Kernel regression to smooth prices
+        # KernelReg requires a numeric independent variable; a DatetimeIndex
+        # causes a dtype promotion error between float64 and datetime64.
+        x_numeric = np.arange(len(df), dtype=float)
+
         kr = KernelReg(
-            pd.to_numeric(series), df.index, var_type="c", bw=[0.85]
+            pd.to_numeric(series), x_numeric, var_type="c", bw=[0.85]
         )
-        f = kr.fit([df.index.values])
+        f = kr.fit([x_numeric])
         smooth_prices = pd.Series(data=f[0], index=df.index)
 
         # Find extrema in smoothed prices
