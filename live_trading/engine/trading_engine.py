@@ -345,71 +345,133 @@ class TradingEngine:
         logger.info("Crash recovery completed")
 
     async def _sync_positions_from_broker(self, operation: TradingOperation):
-        """Sync positions from broker to database"""
-        try:
-            logger.info(f"Syncing positions from broker for operation {operation.id}...")
+        """Reconcile positions and pending orders from the broker into the database.
 
-            # Get positions from broker
+        This is the single source of truth sync that runs on startup and every 30 s.
+        It fixes three categories of divergence:
+          1. Positions that exist on the broker but not in the DB (e.g. order filled
+             while the bot was down, or placed directly on cTrader).
+          2. DB positions that no longer exist on the broker (closed externally).
+          3. DB orders stuck in PENDING status whose broker order has already been
+             resolved (filled, cancelled, or rejected).
+        """
+        try:
+            logger.info(f"[SYNC] Reconciling broker state for operation {operation.id} ({operation.asset})...")
+
+            # --- 1. Fetch broker positions (also populates _open_orders_cache) ---
             broker_positions = await self.broker.get_positions()
 
-            # Get positions from database
+            # get_positions() also refreshes _open_orders_cache via the reconcile response
+            broker_open_orders: List[Dict[str, Any]] = []
+            if hasattr(self.broker, 'get_open_broker_orders'):
+                broker_open_orders = await self.broker.get_open_broker_orders()
+
+            # Build a set of broker_order_ids that are still open on the broker
+            broker_open_order_ids = {o["broker_order_id"] for o in broker_open_orders}
+
+            # --- 2. Sync positions ---
             db_positions = await Position.find(
                 Position.operation_id == operation.id,
                 Position.closed_at == None
             ).to_list()
-
-            # Create a map of database positions by contract_symbol
             db_positions_map = {pos.contract_symbol: pos for pos in db_positions}
 
-            # Update or create positions from broker
-            for broker_pos in broker_positions:
-                asset = broker_pos.get("asset", "")
-                if asset != operation.asset:
-                    continue  # Skip positions for other assets
+            # Filter to positions for this operation's asset only
+            our_broker_positions = [p for p in broker_positions if p.get("asset") == operation.asset]
 
-                # Check if position exists in database
+            for broker_pos in our_broker_positions:
+                asset = broker_pos["asset"]
+                quantity = broker_pos.get("quantity", 0.0)
+                avg_price = broker_pos.get("avg_price", 0.0)
+                current_price = broker_pos.get("current_price", avg_price)
+                unrealized_pnl = broker_pos.get("unrealized_pnl", 0.0)
+                unrealized_pnl_pct = broker_pos.get("unrealized_pnl_pct", 0.0)
+
                 if asset in db_positions_map:
-                    # Update existing position
                     db_pos = db_positions_map[asset]
-                    db_pos.current_price = broker_pos.get("current_price", db_pos.current_price)
-                    db_pos.unrealized_pnl = broker_pos.get("unrealized_pnl", 0.0)
-                    if db_pos.entry_price and db_pos.quantity:
-                        db_pos.unrealized_pnl_pct = (
-                            (db_pos.current_price - db_pos.entry_price) / db_pos.entry_price * 100
-                            if db_pos.quantity > 0
-                            else (db_pos.entry_price - db_pos.current_price) / db_pos.entry_price * 100
-                        )
+                    db_pos.current_price = current_price
+                    db_pos.unrealized_pnl = unrealized_pnl
+                    db_pos.unrealized_pnl_pct = unrealized_pnl_pct
                     await db_pos.save()
-                    logger.debug(f"Updated position for {asset} from broker")
+                    logger.debug(f"[SYNC] Updated position {asset}: price={current_price}, upnl={unrealized_pnl:.2f}")
                 else:
-                    # Create new position if quantity is not zero
-                    quantity = broker_pos.get("quantity", 0.0)
-                    if abs(quantity) > 0.0001:  # Small threshold for floating point
-                        new_position = Position(
+                    if abs(quantity) > 0.0001:
+                        new_pos = Position(
                             operation_id=operation.id,
                             contract_symbol=asset,
                             quantity=quantity,
-                            entry_price=broker_pos.get("avg_price", 0.0),
-                            current_price=broker_pos.get("current_price", broker_pos.get("avg_price", 0.0)),
-                            unrealized_pnl=broker_pos.get("unrealized_pnl", 0.0),
-                            unrealized_pnl_pct=broker_pos.get("unrealized_pnl_pct", 0.0)
+                            entry_price=avg_price,
+                            current_price=current_price,
+                            unrealized_pnl=unrealized_pnl,
+                            unrealized_pnl_pct=unrealized_pnl_pct,
                         )
-                        await new_position.insert()
-                        logger.info(f"Created new position for {asset} from broker")
+                        await new_pos.insert()
+                        logger.info(f"[SYNC] Created missing DB position for {asset} @ {avg_price} (qty={quantity})")
 
-            # Close positions in database that no longer exist in broker
-            broker_assets = {pos.get("asset") for pos in broker_positions if pos.get("asset") == operation.asset}
+            # Close DB positions no longer present on the broker
+            broker_asset_set = {p["asset"] for p in our_broker_positions}
             for db_pos in db_positions:
-                if db_pos.contract_symbol not in broker_assets:
-                    # Position closed in broker but not in database
+                if db_pos.contract_symbol not in broker_asset_set:
                     db_pos.closed_at = datetime.utcnow()
                     await db_pos.save()
-                    logger.info(f"Closed position {db_pos.contract_symbol} - no longer exists in broker")
+                    logger.info(f"[SYNC] Marked DB position {db_pos.contract_symbol} closed (no longer on broker)")
 
-            logger.info(f"Position sync completed for operation {operation.id}")
+            # --- 3. Reconcile stuck PENDING orders ---
+            # Find all orders in DB that the bot believes are still pending
+            pending_db_orders = await Order.find(
+                Order.operation_id == operation.id,
+                Order.status == "PENDING"
+            ).to_list()
+
+            for db_order in pending_db_orders:
+                if not db_order.broker_order_id:
+                    # No broker ID means place_order returned "" → already REJECTED in DB
+                    # (this shouldn't be PENDING, but fix it defensively)
+                    db_order.status = "REJECTED"
+                    await db_order.save()
+                    logger.warning(f"[SYNC] Order {db_order.id} had no broker_order_id but was PENDING — marked REJECTED")
+                    continue
+
+                if db_order.broker_order_id in broker_open_order_ids:
+                    # Still genuinely pending on broker — nothing to do
+                    continue
+
+                # Order is not in broker's open orders. Determine what happened.
+                # If the broker now has a position for this asset it was likely filled.
+                if operation.asset in broker_asset_set:
+                    # A position exists — the order was probably FILLED (missed callback)
+                    db_order.status = "FILLED"
+                    db_order.filled_at = db_order.filled_at or datetime.utcnow()
+                    await db_order.save()
+                    logger.info(
+                        f"[SYNC] Order {db_order.broker_order_id} not in broker open orders but position exists "
+                        f"→ marking FILLED (callback was missed)"
+                    )
+                else:
+                    # No position → order was cancelled or rejected on the broker side
+                    db_order.status = "CANCELLED"
+                    await db_order.save()
+                    logger.info(
+                        f"[SYNC] Order {db_order.broker_order_id} not in broker open orders and no position "
+                        f"→ marking CANCELLED"
+                    )
+
+            # --- 4. Update current_capital from real broker balance ---
+            if hasattr(self.broker, 'get_account_info'):
+                try:
+                    account_info = await self.broker.get_account_info()
+                    broker_balance = account_info.get("balance")
+                    if broker_balance is not None and broker_balance > 0:
+                        operation.current_capital = float(broker_balance)
+                        await operation.save()
+                        logger.info(f"[SYNC] Updated current_capital to broker balance: {broker_balance:.2f}")
+                except Exception as bal_err:
+                    logger.warning(f"[SYNC] Could not fetch broker balance: {bal_err}")
+
+            logger.info(f"[SYNC] Reconciliation complete for operation {operation.id}")
 
         except Exception as e:
-            logger.error(f"Error syncing positions from broker: {e}", exc_info=True)
+            logger.error(f"[SYNC] Error during broker reconciliation: {e}", exc_info=True)
 
     async def shutdown(self):
         """Shutdown the trading engine"""
