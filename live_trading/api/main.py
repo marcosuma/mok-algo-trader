@@ -589,6 +589,9 @@ async def get_operation_stats(operation_id: str):
         Position.closed_at == None
     ).to_list()
 
+    # Unrealized P&L from open positions
+    total_unrealized_pnl = sum(p.unrealized_pnl or 0.0 for p in positions)
+
     return {
         "operation_id": str(operation.id),
         "broker_type": operation.broker_type,
@@ -598,8 +601,37 @@ async def get_operation_stats(operation_id: str):
         "total_pnl": operation.total_pnl,
         "total_pnl_pct": operation.total_pnl_pct,
         "open_positions": len(positions),
-        "current_capital": operation.current_capital
+        "unrealized_pnl": total_unrealized_pnl,
+        "current_capital": operation.current_capital,
+        # last_synced_at lets the UI warn when data may be stale
+        "last_synced_at": operation.updated_at.isoformat() if operation.updated_at else None,
     }
+
+
+@app.post("/api/operations/{operation_id}/reconcile")
+async def reconcile_operation(
+    operation_id: str,
+    engine: TradingEngine = Depends(get_trading_engine)
+):
+    """Force an immediate broker reconciliation for this operation.
+
+    Syncs positions, marks stuck PENDING orders correctly, and refreshes
+    current_capital from the real broker balance.
+    """
+    try:
+        op_id = ObjectId(operation_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid operation ID")
+
+    operation = await TradingOperation.get(op_id)
+    if not operation:
+        raise HTTPException(status_code=404, detail="Operation not found")
+
+    try:
+        await engine._sync_positions_from_broker(operation)
+        return {"message": "Reconciliation complete", "operation_id": operation_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Reconciliation failed: {e}")
 
 
 @app.get("/api/stats/overall")
