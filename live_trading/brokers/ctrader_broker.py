@@ -97,6 +97,7 @@ class CTraderBroker(BaseBroker):
         self._pending_requests: Dict[int, Deferred] = {}  # request_id -> deferred
         self._request_id_counter = 0
         self._positions_cache: List[Dict[str, Any]] = []
+        self._open_orders_cache: List[Dict[str, Any]] = []  # pending broker orders from last reconcile
         self._account_info_cache: Dict[str, Any] = {}
         self._historical_data_callbacks: Dict[int, Callable] = {}  # request_id -> callback
         self._historical_data_context: Dict[int, Dict] = {}  # request_id -> context
@@ -1937,26 +1938,52 @@ class CTraderBroker(BaseBroker):
                     positions = []
                     if hasattr(extracted, 'position'):
                         for pos in extracted.position:
-                            # Get symbol_id for price conversion
                             symbol_id = pos.tradeData.symbolId if hasattr(pos, 'tradeData') else None
+                            asset = self._get_symbol_name(symbol_id) if symbol_id else "UNKNOWN"
 
-                            # Convert prices from cTrader integer format
                             entry_price = self._convert_price(pos.price, symbol_id) if hasattr(pos, 'price') and symbol_id else 0
 
-                            # Convert unrealized PnL from cents to actual currency
-                            unrealized_pnl = ((pos.swap if hasattr(pos, 'swap') else 0) +
-                                            (pos.commission if hasattr(pos, 'commission') else 0)) / 100.0
+                            # Unrealized P&L = gross profit + swap + commission (all in cents → divide by 100)
+                            unrealized_pnl = (
+                                (pos.swap if hasattr(pos, 'swap') else 0) +
+                                (pos.commission if hasattr(pos, 'commission') else 0)
+                            ) / 100.0
+                            # grossProfit is on position.positionStatus / may come as separate field
+                            if hasattr(pos, 'grossProfit'):
+                                unrealized_pnl += pos.grossProfit / 100.0
+
+                            side = "BUY" if hasattr(pos, 'tradeData') and pos.tradeData.tradeSide == 1 else "SELL"
+                            volume = pos.tradeData.volume / 100 if hasattr(pos, 'tradeData') else 0
+                            # Use signed quantity: positive for LONG, negative for SHORT
+                            quantity = volume if side == "BUY" else -volume
+                            position_type = "LONG" if side == "BUY" else "SHORT"
+                            unrealized_pnl_pct = (
+                                (unrealized_pnl / (entry_price * volume) * 100)
+                                if volume and entry_price else 0
+                            )
 
                             positions.append({
                                 "position_id": str(pos.positionId),
-                                "symbol": self._get_symbol_name(symbol_id) if symbol_id else "UNKNOWN",
-                                "side": "BUY" if hasattr(pos, 'tradeData') and pos.tradeData.tradeSide == 1 else "SELL",
-                                "volume": pos.tradeData.volume / 100 if hasattr(pos, 'tradeData') else 0,  # Convert from cents
-                                "entry_price": entry_price,
-                                "current_price": entry_price,  # Will be updated with spot price
+                                "asset": asset,           # standardised key expected by sync
+                                "quantity": quantity,     # signed
+                                "position_type": position_type,
+                                "avg_price": entry_price, # standardised key expected by sync
+                                "current_price": entry_price,  # updated with spot prices on ticks
                                 "unrealized_pnl": unrealized_pnl,
-                                "margin_used": pos.usedMargin / 100 if hasattr(pos, 'usedMargin') else 0,
+                                "unrealized_pnl_pct": unrealized_pnl_pct,
                             })
+
+                    # Also cache open (pending) orders from the reconcile response
+                    open_orders = []
+                    if hasattr(extracted, 'order'):
+                        for ord_ in extracted.order:
+                            symbol_id = ord_.tradeData.symbolId if hasattr(ord_, 'tradeData') else None
+                            open_orders.append({
+                                "broker_order_id": str(ord_.orderId),
+                                "asset": self._get_symbol_name(symbol_id) if symbol_id else "UNKNOWN",
+                                "status": str(ord_.orderStatus),
+                            })
+                    self._open_orders_cache = open_orders
 
                     self._positions_cache = positions
                     if not future.done():
@@ -1988,6 +2015,15 @@ class CTraderBroker(BaseBroker):
         except Exception as e:
             logger.error(f"Error getting positions: {e}", exc_info=True)
             return []
+
+    async def get_open_broker_orders(self) -> List[Dict[str, Any]]:
+        """Return the pending orders captured during the last get_positions() reconcile call.
+
+        Call get_positions() first to refresh the cache, then call this method to
+        retrieve the open orders that were returned in the same ProtoOAReconcileReq
+        response.
+        """
+        return list(self._open_orders_cache)
 
     async def get_account_info(self) -> Dict[str, Any]:
         """Get account information using ProtoOATraderReq"""
