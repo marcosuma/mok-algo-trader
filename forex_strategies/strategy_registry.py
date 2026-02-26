@@ -31,6 +31,7 @@ def _discover_strategies():
         'breakout_strategy',
         'buy_and_hold_strategy',
         'hammer_shooting_star',
+        'institutional_flow_strategy',
         'market_structure_strategy',
         'marsi_strategy',
         'mean_reversion_strategy',

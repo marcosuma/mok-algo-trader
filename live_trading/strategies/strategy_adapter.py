@@ -171,10 +171,13 @@ class StrategyAdapter:
 
     async def _align_timeframes(self) -> Optional[pd.DataFrame]:
         """Align data from multiple timeframes"""
-        # Get latest bars for primary timeframe
+        # Indicators are already computed by _process_completed_bar and stored
+        # in the buffer, so we pass recalculate_indicators=False to avoid
+        # redundant full-dataset indicator runs (major CPU savings).
         primary_df = await self.data_manager.get_dataframe(
             self.operation_id,
-            self.primary_bar_size
+            self.primary_bar_size,
+            recalculate_indicators=False,
         )
 
         if primary_df.empty:
@@ -187,7 +190,8 @@ class StrategyAdapter:
 
             other_df = await self.data_manager.get_dataframe(
                 self.operation_id,
-                bar_size
+                bar_size,
+                recalculate_indicators=False,
             )
 
             if not other_df.empty:

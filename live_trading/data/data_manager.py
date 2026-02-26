@@ -171,6 +171,9 @@ class DataManager:
         # Track tick counts for monitoring
         self.tick_counts: Dict[str, int] = defaultdict(int)
 
+        # Cache retention settings per operation to avoid DB queries on every bar
+        self._retention_cache: Dict[str, int] = {}
+
     def register_operation(
         self,
         operation_id: str,
@@ -308,9 +311,13 @@ class DataManager:
             existing_bars.append(bar_data)
             logger.debug(f"[DataManager] {op_tag} New bar in buffer: {bar_size} @ {bar_timestamp}")
 
-        # Apply data retention limit
-        operation = await TradingOperation.get(operation_id)
-        retention_bars = operation.data_retention_bars if operation else config.DEFAULT_DATA_RETENTION_BARS
+        # Apply data retention limit (cached to avoid DB query on every bar)
+        if operation_id not in self._retention_cache:
+            operation = await TradingOperation.get(operation_id)
+            self._retention_cache[operation_id] = (
+                operation.data_retention_bars if operation else config.DEFAULT_DATA_RETENTION_BARS
+            )
+        retention_bars = self._retention_cache[operation_id]
 
         if len(self.data_buffers[operation_id][bar_size]) > retention_bars:
             # Remove oldest bars

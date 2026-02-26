@@ -45,17 +45,33 @@ class CTraderDataProvider(BaseDataProvider):
         "1 week": "10 Y",
     }
 
-    # cTrader bar period mapping
+    # cTrader bar period mapping (ProtoOATrendbarPeriod enum values)
+    # M1=1,M2=2,M3=3,M4=4,M5=5,M10=6,M15=7,M30=8,H1=9,H4=10,H12=11,D1=12,W1=13,MN1=14
     BAR_SIZE_TO_PERIOD = {
         "1 min": 1,     # M1
-        "5 mins": 2,    # M5
-        "15 mins": 3,   # M15
-        "30 mins": 4,   # M30
-        "1 hour": 5,    # H1
-        "4 hours": 6,   # H4
-        "1 day": 7,     # D1
-        "1 week": 8,    # W1
+        "5 mins": 5,    # M5
+        "15 mins": 7,   # M15
+        "30 mins": 8,   # M30
+        "1 hour": 9,    # H1
+        "4 hours": 10,  # H4
+        "1 day": 12,    # D1
+        "1 week": 13,   # W1
     }
+
+    # Bar duration in minutes (used to calculate chunk sizes for pagination)
+    BAR_DURATION_MINUTES = {
+        "1 min": 1,
+        "5 mins": 5,
+        "15 mins": 15,
+        "30 mins": 30,
+        "1 hour": 60,
+        "4 hours": 240,
+        "1 day": 1440,
+        "1 week": 10080,
+    }
+
+    # cTrader API hard limit per request
+    MAX_BARS_PER_REQUEST = 4900
 
     def __init__(
         self,
@@ -359,7 +375,62 @@ class CTraderDataProvider(BaseDataProvider):
         folder = self.get_asset_folder(asset)
         os.makedirs(folder, exist_ok=True)
 
-        # Prepare request
+        # Calculate chunk size to stay within MAX_BARS_PER_REQUEST
+        bar_minutes = self.BAR_DURATION_MINUTES.get(bar_size, 60)
+        chunk_delta = timedelta(minutes=self.MAX_BARS_PER_REQUEST * bar_minutes)
+
+        digits = self._symbol_digits.get(symbol_id, 5)
+
+        print(f"  Fetching {bar_size} data for {asset.pair} "
+              f"({start_time.date()} → {end_time.date()})...")
+
+        all_dfs: List[pd.DataFrame] = []
+        chunk_start = start_time
+        chunk_num = 0
+
+        while chunk_start < end_time:
+            chunk_end = min(chunk_start + chunk_delta, end_time)
+            chunk_df = self._fetch_chunk(
+                symbol_id=symbol_id,
+                period=period,
+                from_ts_ms=int(chunk_start.timestamp() * 1000),
+                to_ts_ms=int(chunk_end.timestamp() * 1000),
+                digits=digits,
+            )
+            if chunk_df is not None and len(chunk_df) > 0:
+                all_dfs.append(chunk_df)
+                chunk_num += 1
+                if chunk_delta < timedelta(days=365):
+                    # Only print chunk progress for small bar sizes with many chunks
+                    print(f"    chunk {chunk_num}: {len(chunk_df)} bars "
+                          f"({chunk_start.date()} → {chunk_end.date()})")
+            chunk_start = chunk_end
+            if chunk_start < end_time:
+                time.sleep(0.3)  # avoid rate-limiting between chunks
+
+        if not all_dfs:
+            print(f"  ⚠ No bars received for {asset.pair}")
+            return None
+
+        df = pd.concat(all_dfs, ignore_index=True)
+        df = df.drop_duplicates(subset=["date"]).sort_values("date").reset_index(drop=True)
+        df.to_csv(csv_path, index=False)
+        print(f"  ✓ Saved {len(df)} bars to {csv_path}")
+
+        if callback:
+            callback(df, asset, csv_path)
+
+        return df
+
+    def _fetch_chunk(
+        self,
+        symbol_id: int,
+        period: int,
+        from_ts_ms: int,
+        to_ts_ms: int,
+        digits: int = 5,
+    ) -> Optional[pd.DataFrame]:
+        """Fetch a single chunk of trendbar data (up to MAX_BARS_PER_REQUEST bars)."""
         result_event = threading.Event()
         result_data = [None]
 
@@ -369,20 +440,17 @@ class CTraderDataProvider(BaseDataProvider):
                 bars = []
 
                 if hasattr(extracted, 'trendbar') and extracted.trendbar:
-                    digits = self._symbol_digits.get(symbol_id, 5)
                     conversion_factor = 10 ** digits
 
                     anomaly_count = 0
                     for idx, bar in enumerate(extracted.trendbar):
                         timestamp = bar.utcTimestampInMinutes * 60 if hasattr(bar, 'utcTimestampInMinutes') else 0
 
-                        # Get raw values for debugging
                         raw_low = bar.low if hasattr(bar, 'low') else 0
                         raw_delta_open = bar.deltaOpen if hasattr(bar, 'deltaOpen') else 0
                         raw_delta_high = bar.deltaHigh if hasattr(bar, 'deltaHigh') else 0
                         raw_delta_close = bar.deltaClose if hasattr(bar, 'deltaClose') else 0
 
-                        # Convert: low is in pipettes, deltas are ALSO in pipettes
                         low = raw_low / conversion_factor
                         open_price = low + (raw_delta_open / conversion_factor)
                         high = low + (raw_delta_high / conversion_factor)
@@ -393,7 +461,6 @@ class CTraderDataProvider(BaseDataProvider):
                         is_anomaly = False
                         anomaly_reason = []
 
-                        # Check for impossible values
                         if high < low:
                             anomaly_reason.append(f"high({high:.5f}) < low({low:.5f})")
                             is_anomaly = True
@@ -404,7 +471,6 @@ class CTraderDataProvider(BaseDataProvider):
                             anomaly_reason.append(f"close({close:.5f}) outside range")
                             is_anomaly = True
 
-                        # Check for very large bars (> 10% move)
                         if low > 0:
                             bar_range_pct = (high - low) / low * 100
                             if bar_range_pct > 10:
@@ -415,7 +481,8 @@ class CTraderDataProvider(BaseDataProvider):
                             anomaly_count += 1
                             if anomaly_count <= 5:
                                 print(f"  ⚠ OHLC anomaly bar {idx}: {', '.join(anomaly_reason)}. "
-                                      f"Raw: low={raw_low}, dO={raw_delta_open}, dH={raw_delta_high}, dC={raw_delta_close}")
+                                      f"Raw: low={raw_low}, dO={raw_delta_open}, "
+                                      f"dH={raw_delta_high}, dC={raw_delta_close}")
 
                         bars.append({
                             "date": datetime.utcfromtimestamp(timestamp).strftime("%Y%m%d %H:%M:%S"),
@@ -427,46 +494,32 @@ class CTraderDataProvider(BaseDataProvider):
                         })
 
                     if anomaly_count > 0:
-                        print(f"  ⚠ Found {anomaly_count} anomalous bars out of {len(bars)}")
+                        print(f"  ⚠ {anomaly_count} anomalous bars in chunk")
 
                     if bars:
-                        df = pd.DataFrame(bars)
-                        df.to_csv(csv_path, index=False)
-                        print(f"  ✓ Saved {len(df)} bars to {csv_path}")
-                        result_data[0] = df
-
-                        if callback:
-                            callback(df, asset, csv_path)
-                    else:
-                        print(f"  ⚠ No bars received for {asset.pair}")
-                else:
-                    print(f"  ⚠ No trendbar data in response for {asset.pair}")
+                        result_data[0] = pd.DataFrame(bars)
 
             except Exception as e:
-                print(f"  ✗ Error processing response: {e}")
+                print(f"  ✗ Error processing chunk: {e}")
             finally:
                 result_event.set()
 
         def on_error(failure):
-            print(f"  ✗ Request failed: {failure}")
+            print(f"  ✗ Chunk request failed: {failure}")
             result_event.set()
 
-        # Send request
         request = ProtoOAGetTrendbarsReq()
         request.ctidTraderAccountId = self.account_id
         request.symbolId = symbol_id
         request.period = period
-        request.fromTimestamp = int(start_time.timestamp() * 1000)
-        request.toTimestamp = int(end_time.timestamp() * 1000)
+        request.fromTimestamp = from_ts_ms
+        request.toTimestamp = to_ts_ms
 
         def send_request():
             d = self.client.send(request)
             d.addCallbacks(on_success, on_error)
 
-        print(f"  Fetching {bar_size} data for {asset.pair}...")
         reactor.callFromThread(send_request)
-
-        # Wait for completion
         result_event.wait(timeout=120)
 
         return result_data[0]

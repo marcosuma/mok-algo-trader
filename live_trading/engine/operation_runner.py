@@ -3,6 +3,7 @@ Operation Runner - Manages a single trading operation.
 """
 import logging
 import asyncio
+from collections import deque
 from typing import Dict, Optional, Tuple
 from datetime import datetime, timedelta
 from bson import ObjectId
@@ -98,19 +99,46 @@ class OperationRunner:
             await self._fill_data_gaps(operation)
 
         # Subscribe to market data from broker
-        # Create a callback that routes broker ticks to data manager
-        # Note: Broker callbacks are synchronous and run in the IBKR API thread,
-        # so we need to use run_coroutine_threadsafe to schedule async work
-        op_tag = self._op_tag  # Capture for closure
+        # Ticks arrive on the broker thread and are batched into a deque.
+        # A single drain coroutine is scheduled on the event loop to process
+        # each batch, reducing scheduling overhead from ~50/sec to ~10/sec.
+        TICK_THROTTLE_SECONDS = 0.1  # 100 ms batching window
+
+        op_tag = self._op_tag
+        op_id_str = str(self.operation_id)
+        op_asset = operation.asset
+        tick_buffer: deque = deque()
+        drain_pending = [False]  # mutable flag for the closure
+
+        async def _drain_tick_buffer():
+            """Wait briefly to accumulate ticks, then process the batch."""
+            await asyncio.sleep(TICK_THROTTLE_SECONDS)
+
+            batch = []
+            while tick_buffer:
+                batch.append(tick_buffer.popleft())
+            drain_pending[0] = False
+
+            for price, size, ts in batch:
+                await self.data_manager.handle_tick(
+                    operation_id=op_id_str,
+                    asset=op_asset,
+                    price=price,
+                    size=size,
+                    timestamp=ts,
+                )
+
+            if tick_buffer and not drain_pending[0]:
+                drain_pending[0] = True
+                asyncio.ensure_future(_drain_tick_buffer())
 
         def broker_tick_callback(tick_data: Dict):
-            """Callback to route broker ticks to data manager"""
+            """Callback to route broker ticks to data manager (throttled)."""
             if tick_data.get("type") == "tick":
                 price = tick_data.get("price")
                 size = tick_data.get("size", 0.0)
                 timestamp = tick_data.get("timestamp", datetime.utcnow())
 
-                # Log first tick and periodic ticks for debugging
                 tick_count = getattr(broker_tick_callback, '_tick_count', 0) + 1
                 broker_tick_callback._tick_count = tick_count
                 if tick_count == 1:
@@ -119,17 +147,16 @@ class OperationRunner:
                     logger.info(f"[TICK] {op_tag} Tick #{tick_count}: price={price}")
 
                 if price is not None and self.event_loop is not None:
-                    try:
-                        coro = self.data_manager.handle_tick(
-                            operation_id=str(self.operation_id),
-                            asset=operation.asset,
-                            price=price,
-                            size=size,
-                            timestamp=timestamp
-                        )
-                        future = asyncio.run_coroutine_threadsafe(coro, self.event_loop)
-                    except Exception as e:
-                        logger.error(f"[TICK] {op_tag} Error scheduling tick processing: {e}", exc_info=True)
+                    tick_buffer.append((price, size, timestamp))
+                    if not drain_pending[0]:
+                        drain_pending[0] = True
+                        try:
+                            asyncio.run_coroutine_threadsafe(
+                                _drain_tick_buffer(), self.event_loop
+                            )
+                        except Exception as e:
+                            drain_pending[0] = False
+                            logger.error(f"[TICK] {op_tag} Error scheduling tick drain: {e}", exc_info=True)
                 elif price is not None:
                     logger.warning(f"[TICK] {op_tag} No event loop available (price: {price})")
 
