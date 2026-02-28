@@ -87,5 +87,10 @@ class LocalExtrema:
         if len(min_idx):
             result.iloc[min_idx] = LOCAL_MIN
 
-        df[self.output_column] = result
+        # Shift forward by min_distance to eliminate look-ahead bias.
+        # scipy find_peaks on the full series identifies a peak at bar N only
+        # after observing min_distance subsequent bars — those bars are "in the
+        # future" at the time bar N closes.  Shifting the labels forward makes
+        # the signal available only once the confirmation bars have passed.
+        df[self.output_column] = result.shift(self.min_distance)
 
