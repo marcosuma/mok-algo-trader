@@ -99,6 +99,7 @@ class CTraderBroker(BaseBroker):
         self._positions_cache: List[Dict[str, Any]] = []
         self._open_orders_cache: List[Dict[str, Any]] = []  # pending broker orders from last reconcile
         self._account_info_cache: Dict[str, Any] = {}
+        self._last_spot_prices: Dict[int, Dict[str, float]] = {}  # symbol_id -> {bid, ask, mid}
         self._historical_data_callbacks: Dict[int, Callable] = {}  # request_id -> callback
         self._historical_data_context: Dict[int, Dict] = {}  # request_id -> context
         self._connection_error: Optional[str] = None  # Store connection errors
@@ -609,6 +610,13 @@ class CTraderBroker(BaseBroker):
             digits = self._symbol_digits.get(symbol_id, 5)
             logger.debug(f"Spot price conversion: raw_bid={raw_bid} -> {bid:.5f}, raw_ask={raw_ask} -> {ask:.5f} (digits={digits})")
 
+            # Cache latest bid/ask per symbol so position P&L can be computed in real-time.
+            # Written on the reactor thread; read from the asyncio thread — safe under Python GIL.
+            if bid > 0 and ask > 0:
+                self._last_spot_prices[symbol_id] = {
+                    "bid": bid, "ask": ask, "mid": (bid + ask) / 2.0,
+                }
+
             # Extract volume from live trendbar data if present
             # ProtoOASpotEvent includes trendbar field when subscribed via ProtoOASubscribeLiveTrendbarReq
             tick_volume = 0
@@ -754,38 +762,48 @@ class CTraderBroker(BaseBroker):
             del self._pending_order_futures[resolved_key]
 
     def _handle_get_positions_res(self, response):  # type: ignore
-        """Handle get positions response"""
+        """Handle pushed get-positions response (ProtoOAReconcileRes / ProtoOAGetPositionsRes).
+
+        NOTE: get_positions() sends an explicit ProtoOAReconcileReq and processes the
+        response itself via a deferred callback — that path is authoritative.  This handler
+        runs on the reactor thread for any push events carrying the same message types.
+        We only update the cache here if the explicit request is NOT already in flight,
+        to avoid overwriting a fresher result.
+        """
         positions_list = []
         for position in response.position:
-            # Get symbol name from cache
-            symbol_id = position.symbolId
-            asset = None
-            for cached_asset, cached_symbol_id in self._symbol_cache.items():
-                if cached_symbol_id == symbol_id:
-                    asset = cached_asset
-                    break
-
+            # ProtoOAPosition nests the symbol under tradeData, NOT at the top level.
+            if not hasattr(position, 'tradeData'):
+                continue
+            symbol_id = position.tradeData.symbolId
+            asset = self._get_symbol_name(symbol_id)
             if not asset:
                 continue
 
-            # Convert prices from cTrader integer format
-            entry_price = self._convert_price(position.entryPrice, symbol_id) if hasattr(position, 'entryPrice') else 0
-            current_price = self._convert_price(position.price, symbol_id) if hasattr(position, 'price') else 0
+            # price = average entry price; there is no separate entryPrice field.
+            entry_price = self._convert_price(position.price, symbol_id) if hasattr(position, 'price') else 0
 
-            # Determine position type
-            if position.tradeSide == ProtoOATradeSide.BUY:
-                position_type = "LONG"
-                quantity = position.volume
+            trade_side = position.tradeData.tradeSide if hasattr(position.tradeData, 'tradeSide') else 1
+            position_type = "LONG" if trade_side == 1 else "SHORT"
+            direction = 1.0 if position_type == "LONG" else -1.0
+            volume_in_units = position.tradeData.volume / 100 if hasattr(position.tradeData, 'volume') else 0
+            quantity = volume_in_units if position_type == "LONG" else -volume_in_units
+
+            # Use live spot cache for current price; fall back to entry price if unavailable.
+            spot = self._last_spot_prices.get(symbol_id)
+            if spot and entry_price > 0:
+                current_price = spot["bid"] if position_type == "LONG" else spot["ask"]
             else:
-                position_type = "SHORT"
-                quantity = -position.volume
+                current_price = entry_price
 
-            # Calculate unrealized PnL (swap, commission, grossProfit are in account currency, not price units)
-            unrealized_pnl = (position.swap if hasattr(position, 'swap') else 0) + \
-                            (position.commission if hasattr(position, 'commission') else 0) + \
-                            (position.grossProfit if hasattr(position, 'grossProfit') else 0)
-            # Convert PnL from cents to actual currency (money is stored in cents)
-            unrealized_pnl = unrealized_pnl / 100.0
+            gross_pnl = (current_price - entry_price) * direction * volume_in_units
+            swap_commission = (
+                (position.swap if hasattr(position, 'swap') else 0) +
+                (position.commission if hasattr(position, 'commission') else 0)
+            ) / 100.0
+            unrealized_pnl = gross_pnl + swap_commission
+            notional = entry_price * volume_in_units
+            unrealized_pnl_pct = (unrealized_pnl / notional * 100) if notional > 0 else 0
 
             positions_list.append({
                 "asset": asset,
@@ -794,7 +812,7 @@ class CTraderBroker(BaseBroker):
                 "avg_price": entry_price,
                 "current_price": current_price,
                 "unrealized_pnl": unrealized_pnl,
-                "unrealized_pnl_pct": (unrealized_pnl / (entry_price * abs(position.volume))) * 100 if position.volume != 0 and entry_price != 0 else 0
+                "unrealized_pnl_pct": unrealized_pnl_pct,
             })
 
         self._positions_cache = positions_list
@@ -1943,32 +1961,44 @@ class CTraderBroker(BaseBroker):
 
                             entry_price = self._convert_price(pos.price, symbol_id) if hasattr(pos, 'price') and symbol_id else 0
 
-                            # Unrealized P&L = gross profit + swap + commission (all in cents → divide by 100)
-                            unrealized_pnl = (
+                            side = "BUY" if hasattr(pos, 'tradeData') and pos.tradeData.tradeSide == 1 else "SELL"
+                            position_type = "LONG" if side == "BUY" else "SHORT"
+                            direction = 1.0 if position_type == "LONG" else -1.0
+                            # volume in base-currency units (tradeData.volume uses scale factor 100)
+                            volume_in_units = pos.tradeData.volume / 100 if hasattr(pos, 'tradeData') else 0
+                            quantity = volume_in_units if side == "BUY" else -volume_in_units
+
+                            # Current market price from live spot cache.
+                            # LONG closes at bid; SHORT closes at ask.
+                            spot = self._last_spot_prices.get(symbol_id)
+                            if spot and entry_price > 0:
+                                current_price = spot["bid"] if position_type == "LONG" else spot["ask"]
+                            else:
+                                current_price = entry_price  # fallback: spot not yet received
+
+                            # Gross P&L = price move × direction × size (in quote currency).
+                            # This matches what cTrader shows as "Gross P&L".
+                            gross_pnl = (current_price - entry_price) * direction * volume_in_units
+
+                            # Funding costs are stored in cTrader's money units (cents) → /100
+                            swap_commission = (
                                 (pos.swap if hasattr(pos, 'swap') else 0) +
                                 (pos.commission if hasattr(pos, 'commission') else 0)
                             ) / 100.0
-                            # grossProfit is on position.positionStatus / may come as separate field
-                            if hasattr(pos, 'grossProfit'):
-                                unrealized_pnl += pos.grossProfit / 100.0
 
-                            side = "BUY" if hasattr(pos, 'tradeData') and pos.tradeData.tradeSide == 1 else "SELL"
-                            volume = pos.tradeData.volume / 100 if hasattr(pos, 'tradeData') else 0
-                            # Use signed quantity: positive for LONG, negative for SHORT
-                            quantity = volume if side == "BUY" else -volume
-                            position_type = "LONG" if side == "BUY" else "SHORT"
-                            unrealized_pnl_pct = (
-                                (unrealized_pnl / (entry_price * volume) * 100)
-                                if volume and entry_price else 0
-                            )
+                            unrealized_pnl = gross_pnl + swap_commission
+
+                            # P&L% = return on notional (entry value of the position)
+                            notional = entry_price * volume_in_units
+                            unrealized_pnl_pct = (unrealized_pnl / notional * 100) if notional > 0 else 0
 
                             positions.append({
                                 "position_id": str(pos.positionId),
-                                "asset": asset,           # standardised key expected by sync
-                                "quantity": quantity,     # signed
+                                "asset": asset,
+                                "quantity": quantity,
                                 "position_type": position_type,
-                                "avg_price": entry_price, # standardised key expected by sync
-                                "current_price": entry_price,  # updated with spot prices on ticks
+                                "avg_price": entry_price,
+                                "current_price": current_price,
                                 "unrealized_pnl": unrealized_pnl,
                                 "unrealized_pnl_pct": unrealized_pnl_pct,
                             })
