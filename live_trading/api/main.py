@@ -50,7 +50,7 @@ class CreateOperationRequest(BaseModel):
     primary_bar_size: str
     strategy_name: str
     strategy_config: Dict[str, Any] = {}
-    initial_capital: float = 10000.0
+    initial_capital: Optional[float] = None
     stop_loss_type: Optional[str] = None
     stop_loss_value: Optional[float] = None
     take_profit_type: Optional[str] = None
@@ -90,7 +90,7 @@ async def create_operation(
             primary_bar_size=request.primary_bar_size,
             strategy_name=request.strategy_name,
             strategy_config=request.strategy_config,
-            initial_capital=request.initial_capital,
+            initial_capital=request.initial_capital or 0.0,
             stop_loss_type=request.stop_loss_type,
             stop_loss_value=request.stop_loss_value,
             take_profit_type=request.take_profit_type,
@@ -670,22 +670,27 @@ async def reconcile_operation(
 
 @app.get("/api/stats/overall")
 async def get_overall_stats(engine: TradingEngine = Depends(get_trading_engine)):
-    """Get overall statistics across all operations"""
+    """Get overall statistics across all operations, with live account info from broker"""
     operations = await TradingOperation.find_all().to_list()
     all_trades = await Trade.find_all().to_list()
 
     total_pnl = sum(op.total_pnl for op in operations)
-    total_capital = sum(op.current_capital for op in operations)
-    initial_capital = sum(op.initial_capital for op in operations)
+
+    # Live account info straight from the broker
+    account_info = await engine.broker.get_account_info()
 
     return {
         "total_operations": len(operations),
         "active_operations": len([op for op in operations if op.status == "active"]),
         "total_trades": len(all_trades),
         "total_pnl": total_pnl,
-        "total_pnl_pct": (total_pnl / initial_capital * 100) if initial_capital > 0 else 0,
-        "total_capital": total_capital,
-        "initial_capital": initial_capital
+        # Live broker account data
+        "balance": account_info.get("balance", 0.0),
+        "equity": account_info.get("equity", 0.0),
+        "floating_pnl": account_info.get("unrealized_pnl", 0.0),
+        "margin_used": account_info.get("margin_used", 0.0),
+        "margin_available": account_info.get("margin_available", 0.0),
+        "currency": account_info.get("currency", ""),
     }
 
 

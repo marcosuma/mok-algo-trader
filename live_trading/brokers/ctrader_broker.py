@@ -2077,17 +2077,20 @@ class CTraderBroker(BaseBroker):
                         trader = extracted.trader
                         # Balance is in cents, convert to actual value
                         balance = trader.balance / 100 if hasattr(trader, 'balance') else 0
-                        money_digits = trader.moneyDigits if hasattr(trader, 'moneyDigits') else 2
+
+                        # Compute floating P&L from cached positions (populated by get_positions / spot events)
+                        floating_pnl = sum(p.get('unrealized_pnl', 0.0) for p in self._positions_cache)
+                        equity = balance + floating_pnl
 
                         account_info = {
                             "account_id": str(self.account_id),
                             "currency": str(trader.depositAssetId) if hasattr(trader, 'depositAssetId') else "USD",
                             "balance": balance,
-                            "equity": balance,  # Will be updated with unrealized PnL
-                            "margin_used": 0.0,  # Will be calculated from positions
-                            "margin_available": balance,
+                            "equity": equity,
+                            "margin_used": 0.0,
+                            "margin_available": equity,
                             "margin_level": 0.0,
-                            "unrealized_pnl": 0.0,
+                            "unrealized_pnl": floating_pnl,
                             "open_trade_count": len(self._positions_cache),
                             "open_position_count": len(self._positions_cache),
                             "broker_name": trader.brokerName if hasattr(trader, 'brokerName') else "cTrader",

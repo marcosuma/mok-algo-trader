@@ -31,7 +31,6 @@ function CreateOperation() {
     primary_bar_size: '',
     strategy_name: '',
     strategy_config: {},
-    initial_capital: 10000,
     stop_loss_type: 'ATR',
     stop_loss_value: 1.5,
     take_profit_type: 'RISK_REWARD',
@@ -101,7 +100,6 @@ function CreateOperation() {
       const payload = {
         ...formData,
         strategy_config,
-        initial_capital: parseFloat(formData.initial_capital),
         stop_loss_value: parseFloat(formData.stop_loss_value),
         take_profit_value: parseFloat(formData.take_profit_value),
         emergency_stop_loss_pct: parseFloat(formData.emergency_stop_loss_pct),
@@ -287,19 +285,6 @@ function CreateOperation() {
               </div>
             </div>
           )}
-
-          <div className="form-group">
-            <label>Initial Capital *</label>
-            <input
-              type="number"
-              name="initial_capital"
-              value={formData.initial_capital}
-              onChange={handleChange}
-              min="0"
-              step="0.01"
-              required
-            />
-          </div>
 
           <h3 style={{ marginTop: '30px', marginBottom: '20px' }}>Risk Management</h3>
 

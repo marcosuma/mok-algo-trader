@@ -64,21 +64,22 @@ function Dashboard() {
             <div className="stat-value">{overallStats.total_trades}</div>
           </div>
           <div className="stat-card">
-            <div className="stat-label">Total P/L</div>
-            <div className={`stat-value ${overallStats.total_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}`}>
-              {formatCurrency(overallStats.total_pnl)}
-            </div>
-            <div className="stat-label">
-              {formatPercent(overallStats.total_pnl_pct)}
+            <div className="stat-label">Balance {overallStats.currency && `(${overallStats.currency})`}</div>
+            <div className="stat-value">{formatCurrency(overallStats.balance)}</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-label">Equity</div>
+            <div className="stat-value">{formatCurrency(overallStats.equity)}</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-label">Floating P/L</div>
+            <div className={`stat-value ${overallStats.floating_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}`}>
+              {formatCurrency(overallStats.floating_pnl)}
             </div>
           </div>
           <div className="stat-card">
-            <div className="stat-label">Total Capital</div>
-            <div className="stat-value">{formatCurrency(overallStats.total_capital)}</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-label">Initial Capital</div>
-            <div className="stat-value">{formatCurrency(overallStats.initial_capital)}</div>
+            <div className="stat-label">Margin Used</div>
+            <div className="stat-value">{formatCurrency(overallStats.margin_used)}</div>
           </div>
         </div>
       )}
