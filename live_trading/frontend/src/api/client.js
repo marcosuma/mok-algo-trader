@@ -12,6 +12,11 @@ const apiClient = axios.create({
     },
 })
 
+// Strategies
+export const strategiesApi = {
+    list: () => apiClient.get('/api/strategies'),
+}
+
 // Operations
 export const operationsApi = {
     list: (status) => {

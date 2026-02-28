@@ -1,12 +1,29 @@
 import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { operationsApi } from '../api/client'
+import { operationsApi, strategiesApi } from '../api/client'
+
+// Default IFS-specific parameters (mirrors InstitutionalFlowStrategy.__init__ defaults)
+const IFS_DEFAULTS = {
+  hurst_threshold: 0.52,
+  use_mean_reversion_mode: false,
+  use_rsi_filter: true,
+  rsi_long_max: 55.0,
+  rsi_short_min: 45.0,
+  use_adx_filter: true,
+  adx_min: 25.0,
+  min_fvg_atr_ratio: 0.5,
+  min_rr_ratio: 2.0,
+  cooldown_bars: 8,
+  session_start_hour: 7,
+  session_end_hour: 17,
+}
 
 function CreateOperation() {
   const navigate = useNavigate()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [strategies, setStrategies] = useState([])
+  const [ifsConfig, setIfsConfig] = useState({ ...IFS_DEFAULTS })
 
   const [formData, setFormData] = useState({
     asset: '',
@@ -25,24 +42,32 @@ function CreateOperation() {
   })
 
   useEffect(() => {
-    // Load available strategies (this would come from an API endpoint)
-    // For now, hardcode common strategies
-    setStrategies([
-      'MomentumStrategy',
-      'AdaptiveMultiIndicatorStrategy',
-      'AdaptiveMultiTimeframeStrategy',
-      'RSIStrategy',
-      'BreakoutStrategy',
-      'MeanReversionStrategy',
-      'ATRBreakout',
-      'MARSIStrategy',
-    ])
+    strategiesApi.list()
+      .then((res) => setStrategies(res.data.map((s) => s.name)))
+      .catch(() => {
+        // Fallback to known strategies if API is unavailable
+        setStrategies([
+          'AdaptiveMultiIndicatorStrategy',
+          'ATRBreakout',
+          'BuyAndHoldStrategy',
+          'HammerShootingStar',
+          'InstitutionalFlowStrategy',
+          'MARSIStrategy',
+          'MarketStructureStrategy',
+          'MeanReversionStrategy',
+          'MomentumStrategy',
+          'MultiTimeframeStrategy',
+          'PatternStrategy',
+          'PatternTriangleStrategy',
+          'RSIStrategy',
+          'TriangleStrategy',
+        ])
+      })
   }, [])
 
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target
     if (type === 'checkbox') {
-      // Handle bar sizes as array
       if (name === 'bar_size') {
         const barSizes = formData.bar_sizes.includes(value)
           ? formData.bar_sizes.filter((bs) => bs !== value)
@@ -54,15 +79,28 @@ function CreateOperation() {
     }
   }
 
+  const handleIfsChange = (e) => {
+    const { name, value, type, checked } = e.target
+    setIfsConfig({
+      ...ifsConfig,
+      [name]: type === 'checkbox' ? checked : (type === 'number' ? parseFloat(value) : value),
+    })
+  }
+
   const handleSubmit = async (e) => {
     e.preventDefault()
     setLoading(true)
     setError(null)
 
     try {
-      // Convert string values to appropriate types
+      const strategy_config =
+        formData.strategy_name === 'InstitutionalFlowStrategy'
+          ? { ...ifsConfig }
+          : {}
+
       const payload = {
         ...formData,
+        strategy_config,
         initial_capital: parseFloat(formData.initial_capital),
         stop_loss_value: parseFloat(formData.stop_loss_value),
         take_profit_value: parseFloat(formData.take_profit_value),
@@ -162,6 +200,93 @@ function CreateOperation() {
               ))}
             </select>
           </div>
+
+          {formData.strategy_name === 'InstitutionalFlowStrategy' && (
+            <div className="card" style={{ marginBottom: '20px', background: '#f8f9fa', border: '1px solid #dee2e6' }}>
+              <h3 style={{ marginBottom: '20px' }}>InstitutionalFlowStrategy Parameters</h3>
+              <p style={{ marginBottom: '16px', color: '#6c757d', fontSize: '14px' }}>
+                Regime-switching FVG strategy. Defaults reflect the tuned configuration
+                from backtest analysis (trend-only mode, RSI + ADX confirmation).
+              </p>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                <div className="form-group">
+                  <label>Hurst Threshold</label>
+                  <input type="number" name="hurst_threshold" value={ifsConfig.hurst_threshold}
+                    onChange={handleIfsChange} min="0" max="1" step="0.01" />
+                  <small style={{ color: '#6c757d' }}>H &gt; threshold = trending regime (default 0.52)</small>
+                </div>
+
+                <div className="form-group">
+                  <label>Min FVG ATR Ratio</label>
+                  <input type="number" name="min_fvg_atr_ratio" value={ifsConfig.min_fvg_atr_ratio}
+                    onChange={handleIfsChange} min="0" step="0.05" />
+                  <small style={{ color: '#6c757d' }}>Min gap size relative to ATR (default 0.5)</small>
+                </div>
+
+                <div className="form-group">
+                  <label>Min R:R Ratio</label>
+                  <input type="number" name="min_rr_ratio" value={ifsConfig.min_rr_ratio}
+                    onChange={handleIfsChange} min="0.5" step="0.1" />
+                  <small style={{ color: '#6c757d' }}>Reject setups below this reward/risk (default 2.0)</small>
+                </div>
+
+                <div className="form-group">
+                  <label>Cooldown Bars</label>
+                  <input type="number" name="cooldown_bars" value={ifsConfig.cooldown_bars}
+                    onChange={handleIfsChange} min="1" step="1" />
+                  <small style={{ color: '#6c757d' }}>Minimum bars between signals (default 8)</small>
+                </div>
+
+                <div className="form-group">
+                  <label>Session Start Hour (UTC)</label>
+                  <input type="number" name="session_start_hour" value={ifsConfig.session_start_hour}
+                    onChange={handleIfsChange} min="0" max="23" step="1" />
+                </div>
+
+                <div className="form-group">
+                  <label>Session End Hour (UTC)</label>
+                  <input type="number" name="session_end_hour" value={ifsConfig.session_end_hour}
+                    onChange={handleIfsChange} min="0" max="23" step="1" />
+                  <small style={{ color: '#6c757d' }}>Default 7–17 UTC covers London + NY sessions</small>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginTop: '8px' }}>
+                <div className="form-group">
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <input type="checkbox" name="use_rsi_filter" checked={ifsConfig.use_rsi_filter}
+                      onChange={handleIfsChange} />
+                    Enable RSI Filter
+                  </label>
+                  <small style={{ color: '#6c757d' }}>Require RSI confirmation before entry</small>
+                </div>
+
+                <div className="form-group">
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <input type="checkbox" name="use_adx_filter" checked={ifsConfig.use_adx_filter}
+                      onChange={handleIfsChange} />
+                    Enable ADX Filter
+                  </label>
+                  {ifsConfig.use_adx_filter && (
+                    <input type="number" name="adx_min" value={ifsConfig.adx_min}
+                      onChange={handleIfsChange} min="0" step="1"
+                      placeholder="Min ADX" style={{ marginTop: '6px' }} />
+                  )}
+                  <small style={{ color: '#6c757d' }}>Require minimum trend strength (default ADX ≥ 25)</small>
+                </div>
+
+                <div className="form-group">
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <input type="checkbox" name="use_mean_reversion_mode" checked={ifsConfig.use_mean_reversion_mode}
+                      onChange={handleIfsChange} />
+                    Enable Mean-Reversion Mode
+                  </label>
+                  <small style={{ color: '#6c757d' }}>Fades FVG gaps in ranging markets. Off by default (loses on trending pairs)</small>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="form-group">
             <label>Initial Capital *</label>
