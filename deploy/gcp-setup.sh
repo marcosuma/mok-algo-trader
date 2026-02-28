@@ -7,8 +7,8 @@
 set -e
 
 # Configuration
-INSTANCE_NAME="${INSTANCE_NAME:-trading-bot}"
-ZONE="${ZONE:-europe-west8-b}"  # Milan, Italy - closest to you
+INSTANCE_NAME="${INSTANCE_NAME:-algo-trading-bot}"
+ZONE="${ZONE:-europe-west2-c}"  # London, UK
 MACHINE_TYPE="${MACHINE_TYPE:-e2-micro}"
 BOOT_DISK_SIZE="${BOOT_DISK_SIZE:-20GB}"
 
@@ -175,9 +175,9 @@ echo ""
 echo -e "${GREEN}Tip: Add these aliases to your ~/.zshrc:${NC}"
 echo ""
 cat << 'ALIASES'
-alias trading-tunnel='gcloud compute ssh trading-bot --zone=europe-west8-b -- -L 8000:localhost:8000 -N'
-alias trading-ssh='gcloud compute ssh trading-bot --zone=europe-west8-b'
-alias trading-logs='gcloud compute ssh trading-bot --zone=europe-west8-b -- journalctl -u trading-bot -f'
+alias trading-tunnel='gcloud compute ssh algo-trading-bot --zone=europe-west2-c -- -L 8000:localhost:8000 -N'
+alias trading-ssh='gcloud compute ssh algo-trading-bot --zone=europe-west2-c'
+alias trading-logs='gcloud compute ssh algo-trading-bot --zone=europe-west2-c -- journalctl -u trading-bot -f'
 ALIASES
 echo ""
 

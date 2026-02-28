@@ -80,7 +80,7 @@ This creates an e2-micro instance (~$6/month) in us-central1-a.
 
 SSH into the instance:
 ```bash
-gcloud compute ssh trading-bot --zone=europe-west8-b
+gcloud compute ssh algo-trading-bot --zone=europe-west2-c
 ```
 
 Clone and run the install script:
@@ -111,7 +111,7 @@ sudo systemctl status trading-bot
 
 Open SSH tunnel:
 ```bash
-gcloud compute ssh trading-bot --zone=europe-west8-b -- -L 8000:localhost:8000 -N
+gcloud compute ssh algo-trading-bot --zone=europe-west2-c -- -L 8000:localhost:8000 -N
 ```
 
 Then run frontend locally:
@@ -129,11 +129,11 @@ Access dashboard at: http://localhost:3000
 | Command | Description |
 |---------|-------------|
 | `./deploy/gcp-setup.sh` | Create GCP instance |
-| `gcloud compute ssh trading-bot --zone=europe-west8-b` | SSH into server |
-| `gcloud compute ssh trading-bot --zone=europe-west8-b -- -L 8000:localhost:8000 -N` | Open SSH tunnel |
-| `gcloud compute instances stop trading-bot --zone=europe-west8-b` | Stop instance (save costs) |
-| `gcloud compute instances start trading-bot --zone=europe-west8-b` | Start instance |
-| `gcloud compute instances delete trading-bot --zone=europe-west8-b` | Delete instance |
+| `gcloud compute ssh algo-trading-bot --zone=europe-west2-c` | SSH into server |
+| `gcloud compute ssh algo-trading-bot --zone=europe-west2-c -- -L 8000:localhost:8000 -N` | Open SSH tunnel |
+| `gcloud compute instances stop algo-trading-bot --zone=europe-west2-c` | Stop instance (save costs) |
+| `gcloud compute instances start algo-trading-bot --zone=europe-west2-c` | Start instance |
+| `gcloud compute instances delete algo-trading-bot --zone=europe-west2-c` | Delete instance |
 
 ### On GCP Server
 
@@ -196,7 +196,7 @@ brew install autossh
 
 # Run (auto-reconnects)
 autossh -M 0 -o "ServerAliveInterval 30" -o "ServerAliveCountMax 3" \
-  -L 8000:localhost:8000 -N trading-bot
+  -L 8000:localhost:8000 -N algo-trading-bot
 ```
 
 ### Check API Health
@@ -208,7 +208,7 @@ curl http://localhost:8000/api/health
 
 ## Cost Optimization
 
-- **Stop when not trading**: `gcloud compute instances stop trading-bot --zone=europe-west8-b`
+- **Stop when not trading**: `gcloud compute instances stop algo-trading-bot --zone=europe-west2-c`
 - **Use preemptible instance**: Add `--preemptible` flag (cheaper but may restart)
 - **Committed use discounts**: For long-term use
 

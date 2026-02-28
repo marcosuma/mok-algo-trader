@@ -5,8 +5,8 @@
 #
 
 # Configuration
-INSTANCE_NAME="${INSTANCE_NAME:-trading-bot}"
-ZONE="${ZONE:-europe-west8-b}"  # Milan, Italy
+INSTANCE_NAME="${INSTANCE_NAME:-algo-trading-bot}"
+ZONE="${ZONE:-europe-west2-c}"  # London, UK
 LOCAL_PORT="${LOCAL_PORT:-8000}"
 REMOTE_PORT="${REMOTE_PORT:-8000}"
 
