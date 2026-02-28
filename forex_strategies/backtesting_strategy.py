@@ -66,11 +66,22 @@ class ForexBacktestingStrategy(Strategy):
         if not self._is_market_order(signal_price, close_price):
             kwargs["limit"] = signal_price
 
-        entry_estimate = (
-            close_price
-            if self._is_market_order(signal_price, close_price)
-            else signal_price
-        )
+        if self._is_market_order(signal_price, close_price):
+            # Market orders fill at the NEXT bar's open, not at the current close.
+            # Use shifted_open (pre-computed as df.open.shift(-1)) as the fill
+            # price estimate so that SL/TP are anchored to the actual fill price.
+            # Without this, SL/TP are offset by the overnight/news gap, making
+            # the backtest over-optimistic on both risk and reward distance.
+            if (
+                hasattr(self.data, "shifted_open")
+                and not pd.isna(self.data.shifted_open[-1])
+                and self.data.shifted_open[-1] > 0
+            ):
+                entry_estimate = float(self.data.shifted_open[-1])
+            else:
+                entry_estimate = close_price
+        else:
+            entry_estimate = signal_price
 
         sl, tp = compute_sl_tp(
             entry_price=entry_estimate,
