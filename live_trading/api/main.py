@@ -10,6 +10,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 from bson import ObjectId
 
+import inspect
 from live_trading.engine.trading_engine import TradingEngine
 
 logger = logging.getLogger(__name__)
@@ -234,6 +235,39 @@ async def resume_operation(
         return {"message": "Operation resumed"}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+# Strategies endpoint
+_BASE_STRATEGY_PARAMS = {
+    "self", "initial_cash", "commission", "spread",
+    "stop_loss_type", "stop_loss_value", "take_profit_type", "take_profit_value",
+    "allow_pyramiding", "max_pyramid_entries", "slippage",
+}
+
+@app.get("/api/strategies")
+async def list_strategies():
+    """
+    List all available strategy names with their strategy-specific default parameters.
+    Base-class parameters (stop_loss_type, initial_cash, etc.) are excluded because
+    they are configured separately in the operation creation form.
+    """
+    from forex_strategies.strategy_registry import get_all_strategies
+
+    result = []
+    for name, cls in sorted(get_all_strategies().items()):
+        try:
+            sig = inspect.signature(cls.__init__)
+            default_config: Dict[str, Any] = {}
+            for param_name, param in sig.parameters.items():
+                if param_name in _BASE_STRATEGY_PARAMS:
+                    continue
+                if param.default is not inspect.Parameter.empty:
+                    default_config[param_name] = param.default
+            result.append({"name": name, "default_config": default_config})
+        except Exception:
+            result.append({"name": name, "default_config": {}})
+
+    return result
 
 
 # Positions endpoints
