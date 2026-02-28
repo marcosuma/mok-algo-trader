@@ -230,31 +230,31 @@ class InstitutionalFlowStrategy(BaseForexStrategy):
         take_profit_type: str = "RISK_REWARD",
         take_profit_value: float = 2.0,
         # Market structure (Layer 4)
-        swing_left_bars: int = 5,
-        swing_right_bars: int = 5,
+        swing_left_bars: int = 8,   # raised: require more significant swing confirmation
+        swing_right_bars: int = 8,  # raised: require more significant swing confirmation
         lookback_swings: int = 4,
         # Fair Value Gap (Layer 1)
-        min_fvg_atr_ratio: float = 0.3,
+        min_fvg_atr_ratio: float = 0.5,   # raised from 0.3: filter micro-gaps / noise
         max_active_fvgs: int = 10,
         # Volatility regime (Layer 2)
         vol_lookback: int = 60,
-        vol_threshold: float = 1.0,
+        vol_threshold: float = 1.5,   # raised from 1.0: allow moderate vol (trend moves need it)
         # Hurst exponent (Layer 3)
         hurst_window: int = 100,
-        hurst_threshold: float = 0.5,
+        hurst_threshold: float = 0.52,   # raised from 0.5: require clearer trending signal
         # Regime switching
-        use_mean_reversion_mode: bool = True,  # Enable mean-rev FVG fill
+        use_mean_reversion_mode: bool = False,  # disabled: MR fires in wrong direction on trending pairs
         # RSI filter (Layer 5, optional)
-        use_rsi_filter: bool = False,
-        rsi_long_max: float = 50.0,   # Long signal only if RSI <= this
-        rsi_short_min: float = 50.0,  # Short signal only if RSI >= this
+        use_rsi_filter: bool = True,   # enabled: confirm pullback / extension
+        rsi_long_max: float = 55.0,    # Long signal only if RSI <= this (55 allows mild momentum)
+        rsi_short_min: float = 45.0,   # Short signal only if RSI >= this
         # ADX filter (Layer 6, optional -- trend mode only)
-        use_adx_filter: bool = False,
-        adx_min: float = 20.0,        # Require ADX >= this in trend mode
+        use_adx_filter: bool = True,   # enabled: require confirmed trend strength
+        adx_min: float = 25.0,         # raised from 20: stronger trend requirement
         # Signal quality
         atr_sl_multiplier: float = 1.5,
-        min_rr_ratio: float = 1.5,
-        cooldown_bars: int = 5,
+        min_rr_ratio: float = 2.0,     # raised from 1.5: require better reward/risk
+        cooldown_bars: int = 8,        # raised from 5: reduce noise signals
         # Session filter (UTC hours, intraday only)
         session_start_hour: int = 7,
         session_end_hour: int = 17,
