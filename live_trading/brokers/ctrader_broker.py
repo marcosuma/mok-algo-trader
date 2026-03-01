@@ -704,7 +704,8 @@ class CTraderBroker(BaseBroker):
             avg_fill_price = None
             last_fill_price = None
             if hasattr(order, 'executionPrice') and order.executionPrice:
-                converted_price = self._convert_price(order.executionPrice, symbol_id) if symbol_id else order.executionPrice
+                # executionPrice is proto double (actual price) — no conversion needed
+                converted_price = order.executionPrice
                 avg_fill_price = converted_price
                 last_fill_price = converted_price
 
@@ -780,8 +781,8 @@ class CTraderBroker(BaseBroker):
             if not asset:
                 continue
 
-            # price = average entry price; there is no separate entryPrice field.
-            entry_price = self._convert_price(position.price, symbol_id) if hasattr(position, 'price') else 0
+            # ProtoOAPosition.price is proto double (actual price already) — no conversion needed.
+            entry_price = position.price if hasattr(position, 'price') else 0.0
 
             trade_side = position.tradeData.tradeSide if hasattr(position.tradeData, 'tradeSide') else 1
             position_type = "LONG" if trade_side == 1 else "SHORT"
@@ -1500,6 +1501,12 @@ class CTraderBroker(BaseBroker):
 
             self._data_subscriptions[asset] = symbol_id
 
+            # Fetch accurate digits BEFORE the first spot event arrives so that
+            # _convert_price uses the real value (not the forex default of 5).
+            # Crypto instruments (ETH-USD, BTC-USD) typically have more digits than
+            # the 5-digit forex default, which would cause 10x–1000x price errors.
+            await self._ensure_symbol_digits(symbol_id)
+
             # Subscribe to spots - must be sent from reactor thread
             request = ProtoOASubscribeSpotsReq()
             request.ctidTraderAccountId = self.account_id
@@ -1959,7 +1966,8 @@ class CTraderBroker(BaseBroker):
                             symbol_id = pos.tradeData.symbolId if hasattr(pos, 'tradeData') else None
                             asset = self._get_symbol_name(symbol_id) if symbol_id else "UNKNOWN"
 
-                            entry_price = self._convert_price(pos.price, symbol_id) if hasattr(pos, 'price') and symbol_id else 0
+                            # ProtoOAPosition.price is proto double (actual price already) — no conversion needed.
+                            entry_price = pos.price if hasattr(pos, 'price') else 0.0
 
                             side = "BUY" if hasattr(pos, 'tradeData') and pos.tradeData.tradeSide == 1 else "SELL"
                             position_type = "LONG" if side == "BUY" else "SHORT"

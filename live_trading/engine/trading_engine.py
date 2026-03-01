@@ -389,11 +389,12 @@ class TradingEngine:
 
                 if asset in db_positions_map:
                     db_pos = db_positions_map[asset]
+                    db_pos.entry_price = avg_price  # keep in sync with broker (fixes stale/wrong values)
                     db_pos.current_price = current_price
                     db_pos.unrealized_pnl = unrealized_pnl
                     db_pos.unrealized_pnl_pct = unrealized_pnl_pct
                     await db_pos.save()
-                    logger.debug(f"[SYNC] Updated position {asset}: price={current_price}, upnl={unrealized_pnl:.2f}")
+                    logger.debug(f"[SYNC] Updated position {asset}: entry={avg_price}, price={current_price}, upnl={unrealized_pnl:.2f}")
                 else:
                     if abs(quantity) > 0.0001:
                         new_pos = Position(
