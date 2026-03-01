@@ -397,16 +397,16 @@ function OperationDetail() {
                     <tr key={pos.id}>
                       <td>{pos.contract_symbol}</td>
                       <td>{pos.quantity}</td>
-                      <td>{formatCurrency(pos.entry_price)}</td>
-                      <td>{formatCurrency(pos.current_price)}</td>
+                      <td>{formatForexPrice(pos.entry_price)}</td>
+                      <td>{formatForexPrice(pos.current_price)}</td>
                       <td className={pos.unrealized_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}>
                         {formatCurrency(pos.unrealized_pnl)}
                       </td>
                       <td className={pos.unrealized_pnl_pct >= 0 ? 'pnl-positive' : 'pnl-negative'}>
                         {formatPercent(pos.unrealized_pnl_pct)}
                       </td>
-                      <td>{pos.stop_loss ? formatCurrency(pos.stop_loss) : '-'}</td>
-                      <td>{pos.take_profit ? formatCurrency(pos.take_profit) : '-'}</td>
+                      <td>{pos.stop_loss ? formatForexPrice(pos.stop_loss) : '-'}</td>
+                      <td>{pos.take_profit ? formatForexPrice(pos.take_profit) : '-'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -432,8 +432,8 @@ function OperationDetail() {
                       <tr key={pos.id}>
                         <td>{pos.contract_symbol}</td>
                         <td>{pos.quantity}</td>
-                        <td>{formatCurrency(pos.entry_price)}</td>
-                        <td>{formatCurrency(pos.current_price)}</td>
+                        <td>{formatForexPrice(pos.entry_price)}</td>
+                        <td>{formatForexPrice(pos.current_price)}</td>
                         <td>{formatDate(pos.opened_at)}</td>
                         <td>{formatDate(pos.closed_at)}</td>
                       </tr>
@@ -471,7 +471,7 @@ function OperationDetail() {
                       <td>{txn.transaction_type}</td>
                       <td>{txn.transaction_role}</td>
                       <td>{txn.position_type}</td>
-                      <td>{formatCurrency(txn.price)}</td>
+                      <td>{formatForexPrice(txn.price)}</td>
                       <td>{txn.quantity}</td>
                       <td>{formatCurrency(txn.commission)}</td>
                       <td className={txn.profit >= 0 ? 'pnl-positive' : 'pnl-negative'}>
@@ -514,8 +514,8 @@ function OperationDetail() {
                   {trades.map((trade) => (
                     <tr key={trade.id}>
                       <td>{trade.position_type}</td>
-                      <td>{formatCurrency(trade.entry_price)}</td>
-                      <td>{formatCurrency(trade.exit_price)}</td>
+                      <td>{formatForexPrice(trade.entry_price)}</td>
+                      <td>{formatForexPrice(trade.exit_price)}</td>
                       <td>{trade.quantity}</td>
                       <td className={trade.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}>
                         {formatCurrency(trade.pnl)}
