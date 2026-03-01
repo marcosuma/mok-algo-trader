@@ -386,6 +386,8 @@ class TradingEngine:
                 current_price = broker_pos.get("current_price", avg_price)
                 unrealized_pnl = broker_pos.get("unrealized_pnl", 0.0)
                 unrealized_pnl_pct = broker_pos.get("unrealized_pnl_pct", 0.0)
+                stop_loss = broker_pos.get("stop_loss")
+                take_profit = broker_pos.get("take_profit")
 
                 if asset in db_positions_map:
                     db_pos = db_positions_map[asset]
@@ -393,6 +395,8 @@ class TradingEngine:
                     db_pos.current_price = current_price
                     db_pos.unrealized_pnl = unrealized_pnl
                     db_pos.unrealized_pnl_pct = unrealized_pnl_pct
+                    db_pos.stop_loss = stop_loss
+                    db_pos.take_profit = take_profit
                     await db_pos.save()
                     logger.debug(f"[SYNC] Updated position {asset}: entry={avg_price}, price={current_price}, upnl={unrealized_pnl:.2f}")
                 else:
@@ -405,6 +409,8 @@ class TradingEngine:
                             current_price=current_price,
                             unrealized_pnl=unrealized_pnl,
                             unrealized_pnl_pct=unrealized_pnl_pct,
+                            stop_loss=stop_loss,
+                            take_profit=take_profit,
                         )
                         await new_pos.insert()
                         logger.info(f"[SYNC] Created missing DB position for {asset} @ {avg_price} (qty={quantity})")

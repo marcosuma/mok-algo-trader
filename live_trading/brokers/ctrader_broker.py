@@ -813,6 +813,11 @@ class CTraderBroker(BaseBroker):
             notional = entry_price * volume_in_units
             unrealized_pnl_pct = (unrealized_pnl / notional * 100) if notional > 0 else 0
 
+            # SL/TP are optional double fields (actual price, no unit conversion needed).
+            # They are 0.0 (falsy) when not set on the position.
+            stop_loss = getattr(position, 'stopLoss', None) or None
+            take_profit = getattr(position, 'takeProfit', None) or None
+
             positions_list.append({
                 "asset": asset,
                 "quantity": quantity,
@@ -821,6 +826,8 @@ class CTraderBroker(BaseBroker):
                 "current_price": current_price,
                 "unrealized_pnl": unrealized_pnl,
                 "unrealized_pnl_pct": unrealized_pnl_pct,
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
             })
 
         self._positions_cache = positions_list
@@ -2007,6 +2014,10 @@ class CTraderBroker(BaseBroker):
                             notional = entry_price * volume_in_units
                             unrealized_pnl_pct = (unrealized_pnl / notional * 100) if notional > 0 else 0
 
+                            # SL/TP are optional double (actual price, no conversion needed).
+                            stop_loss = getattr(pos, 'stopLoss', None) or None
+                            take_profit = getattr(pos, 'takeProfit', None) or None
+
                             positions.append({
                                 "position_id": str(pos.positionId),
                                 "asset": asset,
@@ -2016,6 +2027,8 @@ class CTraderBroker(BaseBroker):
                                 "current_price": current_price,
                                 "unrealized_pnl": unrealized_pnl,
                                 "unrealized_pnl_pct": unrealized_pnl_pct,
+                                "stop_loss": stop_loss,
+                                "take_profit": take_profit,
                             })
 
                     # Also cache open (pending) orders from the reconcile response
