@@ -272,8 +272,11 @@ async def list_strategies():
 
 # Positions endpoints
 @app.get("/api/operations/{operation_id}/positions")
-async def get_positions(operation_id: str):
-    """Get positions for an operation"""
+async def get_positions(
+    operation_id: str,
+    engine: TradingEngine = Depends(get_trading_engine),
+):
+    """Get positions for an operation, enriched with live spot prices from the broker cache."""
     try:
         op_id = ObjectId(operation_id)
     except:
@@ -283,22 +286,43 @@ async def get_positions(operation_id: str):
         Position.operation_id == op_id
     ).sort(-Position.opened_at).to_list()
 
-    return [
-        {
+    # Live spot-price cache: {symbol_id: {bid, ask, mid}} — updated on every tick, zero latency.
+    live_spot = getattr(engine.broker, '_last_spot_prices', {})
+    symbol_cache = getattr(engine.broker, '_symbol_cache', {})   # {asset: symbol_id}
+
+    result = []
+    for pos in positions:
+        current_price = pos.current_price
+        unrealized_pnl = pos.unrealized_pnl
+        unrealized_pnl_pct = pos.unrealized_pnl_pct
+
+        symbol_id = symbol_cache.get(pos.contract_symbol)
+        if symbol_id and symbol_id in live_spot:
+            spot = live_spot[symbol_id]
+            position_type = "LONG" if pos.quantity > 0 else "SHORT"
+            current_price = spot["bid"] if position_type == "LONG" else spot["ask"]
+            direction = 1.0 if pos.quantity > 0 else -1.0
+            volume = abs(pos.quantity)
+            gross_pnl = (current_price - pos.entry_price) * direction * volume
+            notional = pos.entry_price * volume
+            unrealized_pnl = gross_pnl
+            unrealized_pnl_pct = (gross_pnl / notional * 100) if notional > 0 else 0.0
+
+        result.append({
             "id": str(pos.id),
             "contract_symbol": pos.contract_symbol,
             "quantity": pos.quantity,
             "entry_price": pos.entry_price,
-            "current_price": pos.current_price,
-            "unrealized_pnl": pos.unrealized_pnl,
-            "unrealized_pnl_pct": pos.unrealized_pnl_pct,
+            "current_price": current_price,
+            "unrealized_pnl": unrealized_pnl,
+            "unrealized_pnl_pct": unrealized_pnl_pct,
             "stop_loss": pos.stop_loss,
             "take_profit": pos.take_profit,
             "opened_at": pos.opened_at,
-            "closed_at": pos.closed_at
-        }
-        for pos in positions
-    ]
+            "closed_at": pos.closed_at,
+        })
+
+    return result
 
 
 # Transactions endpoints

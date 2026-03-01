@@ -168,16 +168,23 @@ class CTraderBroker(BaseBroker):
 
     def _convert_price(self, raw_price: float, symbol_id: int) -> float:
         """
-        Convert cTrader raw price to actual price value.
+        Convert a cTrader raw tick integer to an actual price.
 
-        cTrader returns prices as integers (multiplied by 10^digits) to avoid
-        floating-point precision issues. We need to divide by the conversion factor.
+        All integer price fields in the cTrader Open API (ProtoOASpotEvent bid/ask,
+        ProtoOATrendbar low/delta*, etc.) use a FIXED scale of 1/100,000 regardless
+        of the symbol's 'digits' value.  The 'digits' field is purely for
+        display/rounding purposes, not for the primary unit conversion.
 
-        For forex pairs with 5 decimal places (most common), the factor is 100000.
+        Reference:
+          https://help.ctrader.com/open-api/protocol/trendbars/
+          "All price values are represented in 1/100000 of the base currency pair.
+           E.g. EURUSD 1.08500 → 108500; ETHUSD 1992.68 → 199268000"
+
+        NOTE: proto `double` fields (ProtoOAPosition.price, order.executionPrice)
+        are already in actual price units and must NOT be passed through here.
         """
-        digits = self._symbol_digits.get(symbol_id, 5)  # Default to 5 for forex
-        conversion_factor = 10 ** digits
-        return raw_price / conversion_factor
+        digits = self._symbol_digits.get(symbol_id, 5)
+        return round(raw_price / 100000.0, max(digits, 2))
 
     def _round_price_for_symbol(self, price: float, symbol_id: int) -> float:
         """
@@ -2233,9 +2240,10 @@ class CTraderBroker(BaseBroker):
 
                     bars = []
                     if hasattr(extracted, 'trendbar') and extracted.trendbar:
-                        # Get digits for this symbol for price conversion
-                        digits = self._symbol_digits.get(symbol_id, 5)  # Default to 5 for forex
-                        conversion_factor = 10 ** digits
+                        # cTrader trendbar prices use the same fixed 1/100000 scale as spot events.
+                        # 'digits' is used only for rounding, not as the divisor.
+                        digits = self._symbol_digits.get(symbol_id, 5)
+                        conversion_factor = 100000  # always 1/100000 regardless of digits
 
                         anomaly_count = 0
                         for idx, bar in enumerate(extracted.trendbar):
