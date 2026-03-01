@@ -234,6 +234,30 @@ python cli.py train-volatility-predictor --asset USD-CAD
 python cli.py train-trend-predictor --asset USD-CAD
 ```
 
+### Walk-Forward Analysis
+
+Evaluate which strategies and parameter configs consistently beat Buy & Hold
+across rolling out-of-sample windows (avoids overfitting to a single backtest):
+
+```bash
+# Place an OHLCV CSV in data/XAU-USD/ first, then:
+python walk_forward_analyzer.py --symbol XAUUSD --data data/XAU-USD/
+
+# Custom window sizes
+python walk_forward_analyzer.py --symbol XAUUSD --data data/XAU-USD/ \
+  --warmup 200 --test-bars 500 --step 500
+
+# Explicit file
+python walk_forward_analyzer.py --symbol XAUUSD --data-file data/XAU-USD/xauusd_h1.csv
+```
+
+Results are written to `strategy_test_results/XAUUSD_walkforward_YYYYMMDD_HHMM.md`.
+The report ranks ~50 strategy/param combos by consistency score (% windows beating
+B&H × mean Sharpe), plus per-window detail for the top 3 configs.
+
+**Data format**: CSV with columns `date, open, high, low, close, volume` (technical
+indicators are auto-computed if not already present).
+
 ### Live Trading
 
 **Start in interactive mode** (foreground):
