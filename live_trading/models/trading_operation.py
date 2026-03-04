@@ -29,6 +29,11 @@ class TradingOperation(Document):
     allow_pyramiding: bool = Field(default=False, description="Allow multiple same-direction entries")
     max_pyramid_entries: int = Field(default=1, description="Max concurrent entries in the same direction")
 
+    # Trend direction filter (optional): only allow signals that align with the EMA trend.
+    # SELL signals are blocked when close > EMA; BUY signals are blocked when close < EMA.
+    trend_filter_enabled: bool = Field(default=False, description="Block counter-trend signals using EMA")
+    trend_filter_ma_period: int = Field(default=200, description="EMA period used for trend direction filter")
+
     # Crash recovery config
     crash_recovery_mode: str = Field(default="CLOSE_ALL", description="Crash recovery mode: 'CLOSE_ALL', 'RESUME', 'EMERGENCY_EXIT'")
     emergency_stop_loss_pct: float = Field(default=0.05, description="Emergency exit threshold (e.g., 0.05 for 5%)")

@@ -1030,6 +1030,7 @@ class OperationRunner:
         price: float
     ):
         """Handle trading signal from strategy"""
+        import pandas as pd
         from live_trading.models.position import Position
 
         tag = getattr(self, '_op_tag', f"[OP:{str(self.operation_id)[-6:]}]")
@@ -1041,6 +1042,42 @@ class OperationRunner:
         if operation.status != "active":
             logger.warning(f"[ORDER] {tag} Status '{operation.status}' - order blocked: {signal_type}")
             return
+
+        # --- Trend direction filter ---
+        # Block counter-trend signals: SELL when price > EMA (uptrend), BUY when price < EMA (downtrend).
+        if operation.trend_filter_enabled:
+            period = operation.trend_filter_ma_period
+            ema_col = f"EMA_{period}"
+            try:
+                df = await self.data_manager.get_dataframe(
+                    str(self.operation_id),
+                    operation.primary_bar_size,
+                    recalculate_indicators=False,
+                )
+                if not df.empty and ema_col in df.columns:
+                    last = df.iloc[-1]
+                    ema_val = last.get(ema_col)
+                    close_val = last.get("close")
+                    if ema_val is not None and close_val is not None and not pd.isna(ema_val):
+                        in_uptrend = close_val > ema_val
+                        if signal_type == "SELL" and in_uptrend:
+                            logger.info(
+                                f"[ORDER] {tag} SELL blocked by trend filter: "
+                                f"close={close_val:.5f} > {ema_col}={ema_val:.5f} (uptrend)"
+                            )
+                            return
+                        elif signal_type == "BUY" and not in_uptrend:
+                            logger.info(
+                                f"[ORDER] {tag} BUY blocked by trend filter: "
+                                f"close={close_val:.5f} < {ema_col}={ema_val:.5f} (downtrend)"
+                            )
+                            return
+                    else:
+                        logger.debug(f"[ORDER] {tag} Trend filter: {ema_col} not available, skipping filter")
+                else:
+                    logger.debug(f"[ORDER] {tag} Trend filter: {ema_col} column missing, skipping filter")
+            except Exception as tf_err:
+                logger.warning(f"[ORDER] {tag} Trend filter error (skipping): {tf_err}")
 
         # Check existing position to decide if this signal should be acted on
         open_position = await Position.find_one(
@@ -1061,13 +1098,17 @@ class OperationRunner:
                 )
                 return
 
-        # Place order
+        # Always use MARKET orders in live trading.
+        # The signal price (execute_buy / execute_sell) is the bar close — a stale LIMIT at that
+        # price would only fill when price moves *against* the trade (SELL LIMIT fills on upticks,
+        # BUY LIMIT fills on downticks). Using MARKET gives immediate execution at the best
+        # available bid/ask instead.
         try:
             order = await self.order_manager.place_order(
                 operation_id=self.operation_id,
                 asset=operation.asset,
                 signal_type=signal_type,
-                price=price
+                price=None  # MARKET order
             )
             if order.status == "REJECTED":
                 logger.error(f"[ORDER] {tag} Order rejected by broker: {signal_type}")
