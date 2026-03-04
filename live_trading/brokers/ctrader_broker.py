@@ -98,6 +98,7 @@ class CTraderBroker(BaseBroker):
         self._request_id_counter = 0
         self._positions_cache: List[Dict[str, Any]] = []
         self._open_orders_cache: List[Dict[str, Any]] = []  # pending broker orders from last reconcile
+        self._position_close_callbacks: Dict[str, Callable] = {}  # broker_position_id -> callback
         self._account_info_cache: Dict[str, Any] = {}
         self._last_spot_prices: Dict[int, Dict[str, float]] = {}  # symbol_id -> {bid, ask, mid}
         self._historical_data_callbacks: Dict[int, Callable] = {}  # request_id -> callback
@@ -716,6 +717,17 @@ class CTraderBroker(BaseBroker):
                 avg_fill_price = converted_price
                 last_fill_price = converted_price
 
+            # Extract broker position_id — present on all fills; used to track TP/SL closes.
+            # Prefer event.position.positionId (post-execution state), fall back to order.positionId.
+            broker_position_id = None
+            if hasattr(event, 'position') and hasattr(event.position, 'positionId') and event.position.positionId:
+                broker_position_id = str(event.position.positionId)
+            elif hasattr(order, 'positionId') and order.positionId:
+                broker_position_id = str(order.positionId)
+
+            filled_volume = order.filledVolume if hasattr(order, 'filledVolume') else 0.0
+            order_volume = getattr(order, 'volume', filled_volume)
+
             # Resolve any pending order future (from place_order)
             # Check all pending futures - match by order_id from the execution event
             resolved_key = None
@@ -737,11 +749,43 @@ class CTraderBroker(BaseBroker):
                 callback({
                     "order_id": order_id,
                     "status": status,
-                    "filled": order.filledVolume if hasattr(order, 'filledVolume') else 0.0,
-                    "remaining": order.volume - (order.filledVolume if hasattr(order, 'filledVolume') else 0.0),
+                    "filled": filled_volume,
+                    "remaining": order_volume - filled_volume,
                     "avg_fill_price": avg_fill_price,
-                    "last_fill_price": last_fill_price
+                    "last_fill_price": last_fill_price,
+                    # Passed so OrderManager can register a position-close callback.
+                    "broker_position_id": broker_position_id,
                 })
+
+            elif status == "FILLED" and broker_position_id and broker_position_id in self._position_close_callbacks:
+                # Broker-initiated close (TP/SL or manual close from cTrader UI).
+                # The closing order was created by cTrader — its order_id is unknown to us,
+                # but we registered a callback keyed by the broker position_id when the
+                # entry order filled.
+                callback = self._position_close_callbacks.pop(broker_position_id)
+                logger.info(
+                    f"[ORDER] Broker-initiated position close detected: "
+                    f"position_id={broker_position_id}, order_id={order_id}, "
+                    f"price={avg_fill_price}, volume={filled_volume}"
+                )
+                callback({
+                    "order_id": order_id,
+                    "status": "FILLED",
+                    "filled": filled_volume,
+                    "remaining": 0.0,
+                    "avg_fill_price": avg_fill_price,
+                    "last_fill_price": avg_fill_price,
+                    "broker_position_id": broker_position_id,
+                    "is_position_close": True,
+                })
+
+            elif status == "FILLED":
+                logger.warning(
+                    f"[ORDER] FILLED event for untracked order {order_id} "
+                    f"(position_id={broker_position_id}). "
+                    "No callback registered — position may have been closed externally. "
+                    "The 30-second reconciliation will catch it."
+                )
 
         except Exception as e:
             logger.error(f"Error handling execution event: {e}", exc_info=True)
@@ -1742,6 +1786,10 @@ class CTraderBroker(BaseBroker):
     def register_order_callback(self, broker_order_id: str, callback: Callable):
         """Register a callback for order status updates"""
         self._order_callbacks[broker_order_id] = callback
+
+    def register_position_close_callback(self, broker_position_id: str, callback: Callable):
+        """Register a callback for broker-initiated position closes (TP/SL/manual)."""
+        self._position_close_callbacks[broker_position_id] = callback
 
     def _convert_quantity_to_volume(self, quantity: float, symbol_id: Optional[int] = None) -> int:
         """

@@ -419,9 +419,15 @@ class TradingEngine:
             broker_asset_set = {p["asset"] for p in our_broker_positions}
             for db_pos in db_positions:
                 if db_pos.contract_symbol not in broker_asset_set:
-                    db_pos.closed_at = datetime.utcnow()
-                    await db_pos.save()
-                    logger.info(f"[SYNC] Marked DB position {db_pos.contract_symbol} closed (no longer on broker)")
+                    logger.info(
+                        f"[SYNC] Position {db_pos.contract_symbol} gone from broker "
+                        f"— creating close records via _process_external_close"
+                    )
+                    await self.order_manager._process_external_close(
+                        operation_id=operation.id,
+                        close_price=db_pos.current_price,
+                        filled_volume=abs(db_pos.quantity),
+                    )
 
             # --- 3. Reconcile stuck PENDING orders ---
             # Find all orders in DB that the bot believes are still pending

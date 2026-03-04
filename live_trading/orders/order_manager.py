@@ -1,8 +1,9 @@
 """
 Order Manager - Handles order placement, position management, and P/L calculation.
 """
+import asyncio
 import logging
-from typing import Optional, Dict, Any
+from typing import Callable, Optional, Dict, Any
 from datetime import datetime
 from bson import ObjectId
 
@@ -208,6 +209,16 @@ class OrderManager:
                                 "avg_fill_price": avg_fill_price
                             }
                         )
+                        # Register a callback so broker-initiated TP/SL closes are tracked.
+                        bp_id = status_data.get("broker_position_id")
+                        if bp_id and hasattr(self.broker, "register_position_close_callback"):
+                            self.broker.register_position_close_callback(
+                                bp_id,
+                                self._make_position_close_callback(
+                                    order_to_update.operation_id, bp_id, event_loop
+                                )
+                            )
+                            logger.info(f"[ORDER] {op_tag} Registered position-close callback for broker_position_id={bp_id}")
                     elif new_status == "REJECTED":
                         logger.error(f"[ORDER] {op_tag} REJECTED! {signal_type} - Reason: {status_data.get('reason', 'unknown')}")
                     elif new_status == "CANCELLED":
@@ -722,6 +733,100 @@ class OrderManager:
             position.unrealized_pnl = unrealized_pnl
             position.unrealized_pnl_pct = unrealized_pnl_pct
             await position.save()
+
+    def _make_position_close_callback(
+        self,
+        operation_id: ObjectId,
+        broker_position_id: str,
+        event_loop,
+    ) -> Callable:
+        """Return a thread-safe callback that processes a broker-initiated position close."""
+        def callback(close_data: Dict[str, Any]):
+            close_price = close_data.get("avg_fill_price") or close_data.get("last_fill_price")
+            filled_volume = close_data.get("filled", 0.0)
+            logger.info(
+                f"[ORDER] Position-close callback fired: op={operation_id}, "
+                f"broker_position_id={broker_position_id}, price={close_price}, volume={filled_volume}"
+            )
+            if event_loop:
+                asyncio.run_coroutine_threadsafe(
+                    self._process_external_close(operation_id, close_price, filled_volume),
+                    event_loop,
+                )
+        return callback
+
+    async def _process_external_close(
+        self,
+        operation_id: ObjectId,
+        close_price: Optional[float],
+        filled_volume: float = 0.0,
+        close_time: Optional[datetime] = None,
+    ):
+        """Create close records for a position closed externally (TP/SL/manual from broker UI).
+
+        Idempotent: skips if no open position is found.
+        Creates a synthetic FILLED Order then delegates to on_order_filled() so that
+        FIFO transaction matching, Trade record creation, and position close all happen
+        via the same code path as a normal exit order.
+        """
+        try:
+            open_position = await Position.find_one(
+                Position.operation_id == operation_id,
+                Position.closed_at == None
+            )
+            if not open_position:
+                logger.info(
+                    f"[ORDER] _process_external_close: no open position for op={operation_id} — skipping"
+                )
+                return
+
+            position_type = "LONG" if open_position.quantity > 0 else "SHORT"
+            close_action = "SELL" if position_type == "LONG" else "BUY"
+            close_qty = abs(open_position.quantity)
+            effective_price = close_price if close_price else open_position.current_price
+
+            # Create a synthetic close order so on_order_filled can find it by ID
+            close_order = Order(
+                operation_id=operation_id,
+                broker_order_id=None,
+                order_type="MARKET",
+                action=close_action,
+                quantity=close_qty,
+                price=effective_price,
+                stop_loss=None,
+                take_profit=None,
+                status="FILLED",
+                filled_quantity=close_qty,
+                avg_fill_price=effective_price,
+                filled_at=close_time or datetime.utcnow(),
+            )
+            await close_order.insert()
+
+            logger.info(
+                f"[ORDER] External close: {position_type} op={operation_id} "
+                f"@ {effective_price:.5f} (qty={close_qty}) — processing via on_order_filled"
+            )
+
+            await self.on_order_filled(
+                close_order.id,
+                {"filled": close_qty, "avg_fill_price": effective_price},
+            )
+
+            await self.journal.log_action(
+                action_type="EXTERNAL_POSITION_CLOSE",
+                action_data={
+                    "order_id": str(close_order.id),
+                    "position_type": position_type,
+                    "close_price": effective_price,
+                    "quantity": close_qty,
+                },
+                operation_id=operation_id,
+            )
+        except Exception as e:
+            logger.error(
+                f"[ORDER] _process_external_close error for op={operation_id}: {e}",
+                exc_info=True,
+            )
 
     async def close_position(self, operation_id: ObjectId, position_id: ObjectId):
         """Manually close a position"""
