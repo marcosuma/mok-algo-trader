@@ -415,19 +415,61 @@ class TradingEngine:
                         await new_pos.insert()
                         logger.info(f"[SYNC] Created missing DB position for {asset} @ {avg_price} (qty={quantity})")
 
-            # Close DB positions no longer present on the broker
+            # Close DB positions no longer present on the broker.
+            # Pull deal history from cTrader so we use the actual close price/time
+            # rather than the last cached spot price.
             broker_asset_set = {p["asset"] for p in our_broker_positions}
-            for db_pos in db_positions:
-                if db_pos.contract_symbol not in broker_asset_set:
-                    logger.info(
-                        f"[SYNC] Position {db_pos.contract_symbol} gone from broker "
-                        f"— creating close records via _process_external_close"
+            closed_db_positions = [
+                p for p in db_positions if p.contract_symbol not in broker_asset_set
+            ]
+
+            deal_history: List[Dict[str, Any]] = []
+            if closed_db_positions and hasattr(self.broker, 'get_deal_history'):
+                try:
+                    now_ms = int(datetime.utcnow().timestamp() * 1000)
+                    # Look back to the earliest position open time (or 24 h, whichever is longer)
+                    earliest_open_ms = min(
+                        int(p.opened_at.timestamp() * 1000) for p in closed_db_positions
                     )
-                    await self.order_manager._process_external_close(
-                        operation_id=operation.id,
-                        close_price=db_pos.current_price,
-                        filled_volume=abs(db_pos.quantity),
-                    )
+                    from_ms = min(earliest_open_ms, now_ms - 24 * 3600 * 1000)
+                    deal_history = await self.broker.get_deal_history(from_ms, now_ms)
+                    logger.info(f"[SYNC] Fetched {len(deal_history)} deals from cTrader history")
+                except Exception as dh_err:
+                    logger.warning(f"[SYNC] Could not fetch deal history: {dh_err}")
+
+            for db_pos in closed_db_positions:
+                # Try to find the actual close deal from cTrader history
+                close_price = db_pos.current_price  # fallback
+                close_time = None
+
+                broker_pos_id = getattr(db_pos, 'broker_position_id', None)
+                if deal_history and broker_pos_id:
+                    close_deals = [
+                        d for d in deal_history
+                        if d.get("position_id") == broker_pos_id and d.get("is_close")
+                    ]
+                    if close_deals:
+                        # Most recent close deal wins
+                        best = max(close_deals, key=lambda d: d.get("execution_timestamp_ms", 0))
+                        close_price = best.get("execution_price") or close_price
+                        ts_ms = best.get("execution_timestamp_ms", 0)
+                        if ts_ms:
+                            close_time = datetime.utcfromtimestamp(ts_ms / 1000)
+                        logger.info(
+                            f"[SYNC] Matched close deal for position {broker_pos_id}: "
+                            f"price={close_price}, time={close_time}"
+                        )
+
+                logger.info(
+                    f"[SYNC] Position {db_pos.contract_symbol} gone from broker "
+                    f"— creating close records (price={close_price})"
+                )
+                await self.order_manager._process_external_close(
+                    operation_id=operation.id,
+                    close_price=close_price,
+                    filled_volume=abs(db_pos.quantity),
+                    close_time=close_time,
+                )
 
             # --- 3. Reconcile stuck PENDING orders ---
             # Find all orders in DB that the bot believes are still pending

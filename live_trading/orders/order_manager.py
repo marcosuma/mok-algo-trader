@@ -206,7 +206,9 @@ class OrderManager:
                             order_to_update.id,
                             {
                                 "filled": filled,
-                                "avg_fill_price": avg_fill_price
+                                "avg_fill_price": avg_fill_price,
+                                # Pass broker_position_id so on_order_filled can store it on Position.
+                                "broker_position_id": status_data.get("broker_position_id"),
                             }
                         )
                         # Register a callback so broker-initiated TP/SL closes are tracked.
@@ -606,7 +608,8 @@ class OrderManager:
                 entry_price=order.avg_fill_price,
                 current_price=order.avg_fill_price,
                 stop_loss=order.stop_loss,
-                take_profit=order.take_profit
+                take_profit=order.take_profit,
+                broker_position_id=fill_data.get("broker_position_id"),
             )
             await position.insert()
 

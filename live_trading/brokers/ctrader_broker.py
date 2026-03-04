@@ -2122,6 +2122,91 @@ class CTraderBroker(BaseBroker):
             logger.error(f"Error getting positions: {e}", exc_info=True)
             return []
 
+    async def get_deal_history(
+        self,
+        from_timestamp_ms: int,
+        to_timestamp_ms: int,
+    ) -> List[Dict[str, Any]]:
+        """Fetch deal history from cTrader (ProtoOADealListReq).
+
+        Returns deals in the given UTC millisecond range.  Each dict has:
+          deal_id, position_id, order_id, asset, execution_price,
+          volume_units, trade_side, is_close, execution_timestamp_ms
+        """
+        if not self.connected or not self.authenticated or not self.client:
+            return []
+
+        try:
+            request = ProtoOADealListReq()
+            request.ctidTraderAccountId = self.account_id
+            request.fromTimestamp = from_timestamp_ms
+            request.toTimestamp = to_timestamp_ms
+
+            loop = asyncio.get_event_loop()
+            future = loop.create_future()
+
+            def on_success(response):
+                try:
+                    extracted = Protobuf.extract(response)
+                    deals = []
+                    for deal in getattr(extracted, 'deal', []):
+                        symbol_id = getattr(deal, 'symbolId', None)
+                        asset = self._get_symbol_name(symbol_id) if symbol_id else None
+
+                        # Detect close deals: closing deals have closePositionDetail set.
+                        try:
+                            is_close = deal.HasField('closePositionDetail')
+                        except (AttributeError, ValueError):
+                            is_close = bool(getattr(deal, 'closePositionDetail', None))
+
+                        ts_ms = (
+                            getattr(deal, 'executionTimestamp', 0)
+                            or getattr(deal, 'utcLastUpdateTimestamp', 0)
+                            or getattr(deal, 'createTimestamp', 0)
+                        )
+                        filled_volume = getattr(deal, 'filledVolume', 0)
+
+                        deals.append({
+                            "deal_id": str(getattr(deal, 'dealId', '')),
+                            "position_id": str(deal.positionId) if getattr(deal, 'positionId', None) else None,
+                            "order_id": str(deal.orderId) if getattr(deal, 'orderId', None) else None,
+                            "symbol_id": symbol_id,
+                            "asset": asset,
+                            "execution_price": getattr(deal, 'executionPrice', None),
+                            "volume_units": filled_volume / 100 if filled_volume else 0.0,
+                            "trade_side": "BUY" if getattr(deal, 'tradeSide', 1) == 1 else "SELL",
+                            "is_close": is_close,
+                            "execution_timestamp_ms": ts_ms,
+                        })
+                    if not future.done():
+                        loop.call_soon_threadsafe(future.set_result, deals)
+                except Exception as e:
+                    logger.error(f"Error processing deal list response: {e}", exc_info=True)
+                    if not future.done():
+                        loop.call_soon_threadsafe(future.set_result, [])
+
+            def on_error(failure):
+                logger.error(f"Deal list request failed: {failure}")
+                if not future.done():
+                    loop.call_soon_threadsafe(future.set_result, [])
+
+            def send_request():
+                if self.client:
+                    d = self.client.send(request)
+                    d.addCallbacks(on_success, on_error)
+
+            reactor.callFromThread(send_request)
+
+            try:
+                return await asyncio.wait_for(future, timeout=10.0)
+            except asyncio.TimeoutError:
+                logger.warning("[DEAL] Timeout waiting for deal history")
+                return []
+
+        except Exception as e:
+            logger.error(f"Error fetching deal history: {e}", exc_info=True)
+            return []
+
     async def get_open_broker_orders(self) -> List[Dict[str, Any]]:
         """Return the pending orders captured during the last get_positions() reconcile call.
 

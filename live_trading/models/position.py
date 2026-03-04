@@ -26,6 +26,9 @@ class Position(Document):
     stop_loss: Optional[float] = Field(None, description="Stop loss price")
     take_profit: Optional[float] = Field(None, description="Take profit price")
 
+    # Broker's internal position ID — used to match cTrader deal history on close detection.
+    broker_position_id: Optional[str] = Field(None, description="Broker position ID (e.g. cTrader positionId)")
+
     opened_at: datetime = Field(default_factory=datetime.utcnow, description="When position was opened")
     closed_at: Optional[datetime] = None
 
