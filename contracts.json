@@ -115,6 +115,10 @@
     {
       "contract": "ETH,USD,CRYPTO,PAXOS",
       "enabled": true
+    },
+    {
+      "contract": "XAU,USD,CASH,IDEALPRO",
+      "enabled": true
     }
   ]
 }
