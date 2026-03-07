@@ -3,7 +3,6 @@ import { useParams, Link } from 'react-router-dom'
 import {
   operationsApi,
   positionsApi,
-  transactionsApi,
   tradesApi,
   ordersApi,
   statsApi,
@@ -57,7 +56,6 @@ function OperationDetail() {
   const { id } = useParams()
   const [operation, setOperation] = useState(null)
   const [positions, setPositions] = useState([])
-  const [transactions, setTransactions] = useState([])
   const [trades, setTrades] = useState([])
   const [orders, setOrders] = useState([])
   const [stats, setStats] = useState(null)
@@ -92,21 +90,18 @@ function OperationDetail() {
       const [
         opRes,
         posRes,
-        txnRes,
         tradesRes,
         ordersRes,
         statsRes,
       ] = await Promise.all([
         operationsApi.get(id),
         positionsApi.list(id),
-        transactionsApi.list(id),
         tradesApi.list(id),
         ordersApi.list(id),
         statsApi.operation(id),
       ])
       setOperation(opRes.data)
       setPositions(posRes.data)
-      setTransactions(txnRes.data)
       setTrades(tradesRes.data)
       setOrders(ordersRes.data)
       setStats(statsRes.data)
@@ -228,8 +223,8 @@ function OperationDetail() {
     return <div className="error">Error: {error || 'Operation not found'}</div>
   }
 
-  const openPositions = positions.filter((p) => !p.closed_at)
-  const closedPositions = positions.filter((p) => p.closed_at)
+  const openPositions = positions.filter((p) => p.status === 'OPEN')
+  const closedPositions = positions.filter((p) => p.status === 'CLOSED')
 
   return (
     <div className="container">
@@ -294,12 +289,6 @@ function OperationDetail() {
             onClick={() => setActiveTab('positions')}
           >
             Positions ({positions.length})
-          </button>
-          <button
-            className={`btn ${activeTab === 'transactions' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setActiveTab('transactions')}
-          >
-            Transactions ({transactions.length})
           </button>
           <button
             className={`btn ${activeTab === 'trades' ? 'btn-primary' : 'btn-secondary'}`}
@@ -383,6 +372,7 @@ function OperationDetail() {
                 <thead>
                   <tr>
                     <th>Symbol</th>
+                    <th>Side</th>
                     <th>Quantity</th>
                     <th>Entry Price</th>
                     <th>Current Price</th>
@@ -395,7 +385,8 @@ function OperationDetail() {
                 <tbody>
                   {openPositions.map((pos) => (
                     <tr key={pos.id}>
-                      <td>{pos.contract_symbol}</td>
+                      <td>{pos.symbol}</td>
+                      <td>{pos.side}</td>
                       <td>{pos.quantity}</td>
                       <td>{formatForexPrice(pos.entry_price)}</td>
                       <td>{formatForexPrice(pos.current_price)}</td>
@@ -420,9 +411,12 @@ function OperationDetail() {
                   <thead>
                     <tr>
                       <th>Symbol</th>
+                      <th>Side</th>
                       <th>Quantity</th>
                       <th>Entry Price</th>
-                      <th>Exit Price</th>
+                      <th>Close Price</th>
+                      <th>P/L</th>
+                      <th>Reason</th>
                       <th>Opened</th>
                       <th>Closed</th>
                     </tr>
@@ -430,10 +424,15 @@ function OperationDetail() {
                   <tbody>
                     {closedPositions.map((pos) => (
                       <tr key={pos.id}>
-                        <td>{pos.contract_symbol}</td>
+                        <td>{pos.symbol}</td>
+                        <td>{pos.side}</td>
                         <td>{pos.quantity}</td>
                         <td>{formatForexPrice(pos.entry_price)}</td>
-                        <td>{formatForexPrice(pos.current_price)}</td>
+                        <td>{pos.close_price ? formatForexPrice(pos.close_price) : '-'}</td>
+                        <td className={(pos.realized_pnl || 0) >= 0 ? 'pnl-positive' : 'pnl-negative'}>
+                          {formatCurrency(pos.realized_pnl || 0)} ({formatPercent(pos.realized_pnl_pct || 0)})
+                        </td>
+                        <td>{pos.close_reason || '-'}</td>
                         <td>{formatDate(pos.opened_at)}</td>
                         <td>{formatDate(pos.closed_at)}</td>
                       </tr>
@@ -441,50 +440,6 @@ function OperationDetail() {
                   </tbody>
                 </table>
               </>
-            )}
-          </div>
-        )}
-
-        {activeTab === 'transactions' && (
-          <div>
-            <h3>Transactions</h3>
-            {transactions.length === 0 ? (
-              <p>No transactions</p>
-            ) : (
-              <table>
-                <thead>
-                  <tr>
-                    <th>Type</th>
-                    <th>Role</th>
-                    <th>Position Type</th>
-                    <th>Price</th>
-                    <th>Quantity</th>
-                    <th>Commission</th>
-                    <th>Profit</th>
-                    <th>Profit %</th>
-                    <th>Time</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {transactions.map((txn) => (
-                    <tr key={txn.id}>
-                      <td>{txn.transaction_type}</td>
-                      <td>{txn.transaction_role}</td>
-                      <td>{txn.position_type}</td>
-                      <td>{formatForexPrice(txn.price)}</td>
-                      <td>{txn.quantity}</td>
-                      <td>{formatCurrency(txn.commission)}</td>
-                      <td className={txn.profit >= 0 ? 'pnl-positive' : 'pnl-negative'}>
-                        {formatCurrency(txn.profit)}
-                      </td>
-                      <td className={txn.profit_pct >= 0 ? 'pnl-positive' : 'pnl-negative'}>
-                        {formatPercent(txn.profit_pct)}
-                      </td>
-                      <td>{formatDate(txn.executed_at)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
             )}
           </div>
         )}
@@ -498,35 +453,39 @@ function OperationDetail() {
               <table>
                 <thead>
                   <tr>
-                    <th>Position Type</th>
+                    <th>Symbol</th>
+                    <th>Side</th>
                     <th>Entry Price</th>
-                    <th>Exit Price</th>
+                    <th>Close Price</th>
                     <th>Quantity</th>
                     <th>P/L</th>
                     <th>P/L %</th>
+                    <th>Reason</th>
                     <th>Commission</th>
                     <th>Duration</th>
-                    <th>Entry Time</th>
-                    <th>Exit Time</th>
+                    <th>Opened</th>
+                    <th>Closed</th>
                   </tr>
                 </thead>
                 <tbody>
                   {trades.map((trade) => (
                     <tr key={trade.id}>
-                      <td>{trade.position_type}</td>
+                      <td>{trade.symbol}</td>
+                      <td>{trade.side}</td>
                       <td>{formatForexPrice(trade.entry_price)}</td>
-                      <td>{formatForexPrice(trade.exit_price)}</td>
+                      <td>{trade.close_price ? formatForexPrice(trade.close_price) : '-'}</td>
                       <td>{trade.quantity}</td>
-                      <td className={trade.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}>
-                        {formatCurrency(trade.pnl)}
+                      <td className={(trade.realized_pnl || 0) >= 0 ? 'pnl-positive' : 'pnl-negative'}>
+                        {formatCurrency(trade.realized_pnl || 0)}
                       </td>
-                      <td className={trade.pnl_pct >= 0 ? 'pnl-positive' : 'pnl-negative'}>
-                        {formatPercent(trade.pnl_pct)}
+                      <td className={(trade.realized_pnl_pct || 0) >= 0 ? 'pnl-positive' : 'pnl-negative'}>
+                        {formatPercent(trade.realized_pnl_pct || 0)}
                       </td>
-                      <td>{formatCurrency(trade.total_commission)}</td>
-                      <td>{(trade.duration_seconds / 3600).toFixed(2)} hours</td>
-                      <td>{formatDate(trade.entry_time)}</td>
-                      <td>{formatDate(trade.exit_time)}</td>
+                      <td>{trade.close_reason || '-'}</td>
+                      <td>{formatCurrency(trade.total_commission || 0)}</td>
+                      <td>{trade.duration_seconds ? (trade.duration_seconds / 3600).toFixed(2) + ' hours' : '-'}</td>
+                      <td>{formatDate(trade.opened_at)}</td>
+                      <td>{formatDate(trade.closed_at)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -544,24 +503,29 @@ function OperationDetail() {
               <table>
                 <thead>
                   <tr>
+                    <th>Symbol</th>
+                    <th>Side</th>
                     <th>Type</th>
-                    <th>Action</th>
-                    <th>Quantity</th>
+                    <th>Intent</th>
+                    <th>Qty</th>
                     <th>Price</th>
                     <th>Status</th>
-                    <th>Filled</th>
+                    <th>Filled Qty</th>
                     <th>Avg Fill Price</th>
-                    <th>Placed</th>
+                    <th>Source</th>
+                    <th>Created</th>
                     <th>Filled</th>
                   </tr>
                 </thead>
                 <tbody>
                   {orders.map((order) => (
                     <tr key={order.id}>
+                      <td>{order.symbol}</td>
+                      <td>{order.side}</td>
                       <td>{order.order_type}</td>
-                      <td>{order.action}</td>
-                      <td>{order.quantity}</td>
-                      <td>{order.price ? formatForexPrice(order.price) : 'MARKET'}</td>
+                      <td>{order.intent}</td>
+                      <td>{order.requested_quantity}</td>
+                      <td>{order.requested_price ? formatForexPrice(order.requested_price) : 'MARKET'}</td>
                       <td>
                         <span className={`status-badge status-${order.status.toLowerCase()}`}>
                           {order.status}
@@ -569,7 +533,8 @@ function OperationDetail() {
                       </td>
                       <td>{order.filled_quantity}</td>
                       <td>{order.avg_fill_price ? formatForexPrice(order.avg_fill_price) : '-'}</td>
-                      <td>{formatDate(order.placed_at)}</td>
+                      <td>{order.source}</td>
+                      <td>{formatDate(order.created_at)}</td>
                       <td>{order.filled_at ? formatDate(order.filled_at) : '-'}</td>
                     </tr>
                   ))}

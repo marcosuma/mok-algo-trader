@@ -40,11 +40,6 @@ export const positionsApi = {
     list: (operationId) => apiClient.get(`/api/operations/${operationId}/positions`),
 }
 
-// Transactions
-export const transactionsApi = {
-    list: (operationId) => apiClient.get(`/api/operations/${operationId}/transactions`),
-}
-
 // Trades
 export const tradesApi = {
     list: (operationId) => apiClient.get(`/api/operations/${operationId}/trades`),
