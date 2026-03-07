@@ -99,6 +99,7 @@ class CTraderBroker(BaseBroker):
         self._positions_cache: List[Dict[str, Any]] = []
         self._open_orders_cache: List[Dict[str, Any]] = []  # pending broker orders from last reconcile
         self._position_close_callbacks: Dict[str, Callable] = {}  # broker_position_id -> callback
+        self._global_execution_listeners: List[Callable] = []
         self._account_info_cache: Dict[str, Any] = {}
         self._last_spot_prices: Dict[int, Dict[str, float]] = {}  # symbol_id -> {bid, ask, mid}
         self._historical_data_callbacks: Dict[int, Callable] = {}  # request_id -> callback
@@ -786,6 +787,19 @@ class CTraderBroker(BaseBroker):
                     "No callback registered — position may have been closed externally. "
                     "The 30-second reconciliation will catch it."
                 )
+
+            event_data = {
+                "order_id": order_id,
+                "status": status,
+                "filled": filled_volume,
+                "avg_fill_price": avg_fill_price,
+                "broker_position_id": broker_position_id,
+            }
+            for listener in self._global_execution_listeners:
+                try:
+                    listener(event_data)
+                except Exception as listener_err:
+                    logger.error(f"Global execution listener error: {listener_err}", exc_info=True)
 
         except Exception as e:
             logger.error(f"Error handling execution event: {e}", exc_info=True)
@@ -1790,6 +1804,75 @@ class CTraderBroker(BaseBroker):
     def register_position_close_callback(self, broker_position_id: str, callback: Callable):
         """Register a callback for broker-initiated position closes (TP/SL/manual)."""
         self._position_close_callbacks[broker_position_id] = callback
+
+    def add_execution_listener(self, callback: Callable):
+        """Add a global listener that fires on every ProtoOAExecutionEvent."""
+        self._global_execution_listeners.append(callback)
+
+    async def close_position_by_id(
+        self,
+        broker_position_id: str,
+        volume: Optional[int] = None,
+    ) -> str:
+        """Close a position by its broker position ID.
+
+        Uses ProtoOAClosePositionReq.  Returns the broker order ID of the
+        closing order on success, or ``""`` on failure.
+
+        Args:
+            broker_position_id: The cTrader positionId.
+            volume: Volume to close (cTrader units, i.e. quantity * 100).
+                    If ``None``, the full position is closed.
+        """
+        if not self.connected or not self.authenticated or not self.client:
+            logger.error("[ORDER] Not connected to cTrader — cannot close position")
+            return ""
+
+        try:
+            request = ProtoOAClosePositionReq()
+            request.ctidTraderAccountId = self.account_id
+            request.positionId = int(broker_position_id)
+            if volume is not None:
+                request.volume = volume
+
+            loop = asyncio.get_event_loop()
+            future = loop.create_future()
+            request_key = f"close_{broker_position_id}_{id(future)}"
+            self._pending_order_futures[request_key] = (future, loop, None)
+
+            def on_send_success(response):
+                logger.info(f"[ORDER] Close-position request sent for position {broker_position_id}")
+
+            def on_send_error(failure):
+                logger.error(f"[ORDER] Failed to send close-position request: {failure}")
+                if request_key in self._pending_order_futures:
+                    del self._pending_order_futures[request_key]
+                if not future.done():
+                    loop.call_soon_threadsafe(future.set_result, "")
+
+            def send_request():
+                if self.client:
+                    d = self.client.send(request)
+                    d.addCallbacks(on_send_success, on_send_error)
+                else:
+                    if request_key in self._pending_order_futures:
+                        del self._pending_order_futures[request_key]
+                    loop.call_soon_threadsafe(future.set_result, "")
+
+            reactor.callFromThread(send_request)
+
+            try:
+                result = await asyncio.wait_for(future, timeout=30.0)
+                return result
+            except asyncio.TimeoutError:
+                logger.error(f"[ORDER] Timeout closing position {broker_position_id}")
+                if request_key in self._pending_order_futures:
+                    del self._pending_order_futures[request_key]
+                return ""
+
+        except Exception as e:
+            logger.error(f"[ORDER] Error closing position {broker_position_id}: {e}", exc_info=True)
+            return ""
 
     def _convert_quantity_to_volume(self, quantity: float, symbol_id: Optional[int] = None) -> int:
         """

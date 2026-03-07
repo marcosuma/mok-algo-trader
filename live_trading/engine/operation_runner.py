@@ -1032,6 +1032,7 @@ class OperationRunner:
         """Handle trading signal from strategy"""
         import pandas as pd
         from live_trading.models.position import Position
+        from live_trading.brokers.middleware.types import PositionSide, PositionStatus
 
         tag = getattr(self, '_op_tag', f"[OP:{str(self.operation_id)[-6:]}]")
         operation = await TradingOperation.get(self.operation_id)
@@ -1079,14 +1080,14 @@ class OperationRunner:
             except Exception as tf_err:
                 logger.warning(f"[ORDER] {tag} Trend filter error (skipping): {tf_err}")
 
-        # Check existing position to decide if this signal should be acted on
-        open_position = await Position.find_one(
+        open_positions = await Position.find(
             Position.operation_id == self.operation_id,
-            Position.closed_at == None,  # noqa: E711
-        )
+            Position.status == PositionStatus.OPEN,
+        ).to_list()
 
-        if open_position:
-            is_long = open_position.quantity > 0
+        if open_positions:
+            first_pos = open_positions[0]
+            is_long = first_pos.side == PositionSide.LONG
             same_direction = (
                 (is_long and signal_type == "BUY")
                 or (not is_long and signal_type == "SELL")
@@ -1110,7 +1111,8 @@ class OperationRunner:
                 signal_type=signal_type,
                 price=None  # MARKET order
             )
-            if order.status == "REJECTED":
+            from live_trading.brokers.middleware.types import OrderStatus as _OS
+            if order.status == _OS.REJECTED:
                 logger.error(f"[ORDER] {tag} Order rejected by broker: {signal_type}")
         except Exception as e:
             logger.error(f"[ORDER] {tag} Error placing order for {signal_type}: {e}", exc_info=True)

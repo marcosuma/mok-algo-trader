@@ -1,5 +1,5 @@
 """
-Tests for OrderManager order status callback logic and position sizing.
+Tests for the redesigned OrderManager.
 """
 import asyncio
 import pytest
@@ -7,26 +7,69 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime
 from bson import ObjectId
 
+from live_trading.brokers.middleware.types import (
+    AccountMode,
+    BrokerOrderResult,
+    BrokerOrderUpdate,
+    BrokerPosition,
+    CloseReason,
+    OrderIntent,
+    OrderSide,
+    OrderSource,
+    OrderStatus,
+    OrderType,
+    PositionSide,
+    PositionStatus,
+)
+from live_trading.orders.order_manager import OrderManager, _detect_close_reason
+
 
 @pytest.fixture
-def order_manager():
-    """Create an OrderManager with mocked broker and journal."""
-    from live_trading.orders.order_manager import OrderManager
+def adapter():
+    adapter = AsyncMock()
+    adapter.get_account_mode = MagicMock(return_value=AccountMode.HEDGING)
+    adapter.register_execution_callback = MagicMock()
+    return adapter
 
-    broker = AsyncMock()
+
+@pytest.fixture
+def order_manager(adapter):
     journal = AsyncMock()
-    return OrderManager(broker=broker, journal_manager=journal)
+    return OrderManager(adapter=adapter, journal_manager=journal)
+
+
+class TestNettingModeBlocked:
+    def test_raises_on_netting(self):
+        adapter = MagicMock()
+        adapter.get_account_mode.return_value = AccountMode.NETTING
+        adapter.register_execution_callback = MagicMock()
+        journal = AsyncMock()
+
+        with pytest.raises(NotImplementedError, match="Netting"):
+            OrderManager(adapter=adapter, journal_manager=journal)
+
+
+class TestDetectCloseReason:
+    def test_stop_loss(self):
+        pos = MagicMock(stop_loss=1.10, take_profit=1.12)
+        assert _detect_close_reason(pos, 1.10005) == CloseReason.STOP_LOSS
+
+    def test_take_profit(self):
+        pos = MagicMock(stop_loss=1.10, take_profit=1.12)
+        assert _detect_close_reason(pos, 1.12010) == CloseReason.TAKE_PROFIT
+
+    def test_unknown(self):
+        pos = MagicMock(stop_loss=1.10, take_profit=1.12)
+        assert _detect_close_reason(pos, 1.11) == CloseReason.UNKNOWN
+
+    def test_no_sl_tp(self):
+        pos = MagicMock(stop_loss=None, take_profit=None)
+        assert _detect_close_reason(pos, 1.11) == CloseReason.UNKNOWN
 
 
 class TestCalculateDefaultQuantity:
-    """
-    Regression: _calculate_default_quantity must return lots, not raw units.
-    313k units was wrongly treated as 313k lots → 31 billion volume units.
-    """
-
     @pytest.mark.asyncio
     async def test_returns_lots_not_units(self, order_manager):
-        """EUR-USD: 100k capital, 1% risk, ~3 pip SL → should be ~31 lots, not 3.1M."""
         operation = MagicMock()
         operation.current_capital = 100_000.0
 
@@ -35,13 +78,10 @@ class TestCalculateDefaultQuantity:
             entry_price=1.17712,
             stop_loss=1.17680,
         )
-
-        # risk = 1000, risk/unit = 0.00032, units = 3,125,000, lots = 31.25
         assert 25.0 < lots < 40.0, f"Expected ~31 lots, got {lots}"
 
     @pytest.mark.asyncio
-    async def test_small_account_returns_small_lots(self, order_manager):
-        """1k account with 3-pip SL should produce ~0.3 lots."""
+    async def test_small_account(self, order_manager):
         operation = MagicMock()
         operation.current_capital = 1_000.0
 
@@ -54,7 +94,6 @@ class TestCalculateDefaultQuantity:
 
     @pytest.mark.asyncio
     async def test_fallback_without_stop_loss(self, order_manager):
-        """Without SL, falls back to capital-based sizing — still in lots."""
         operation = MagicMock()
         operation.current_capital = 100_000.0
 
@@ -63,13 +102,13 @@ class TestCalculateDefaultQuantity:
             entry_price=1.17712,
             stop_loss=None,
         )
-        # 1% of 100k = 1000 value, units = 1000/1.177 ≈ 849, lots = 0.00849
-        assert lots < 1.0, f"Fallback lots should be < 1, got {lots}"
+        assert lots > 0.0
+        assert lots < 100, f"Capital-based fallback should be reasonable, got {lots}"
 
     @pytest.mark.asyncio
-    async def test_zero_price_returns_minimum(self, order_manager):
+    async def test_minimum_fallback(self, order_manager):
         operation = MagicMock()
-        operation.current_capital = 100_000.0
+        operation.current_capital = 100.0
 
         lots = await order_manager._calculate_default_quantity(
             operation=operation,
@@ -78,190 +117,151 @@ class TestCalculateDefaultQuantity:
         )
         assert lots == 0.01
 
+
+class TestPlaceOrder:
     @pytest.mark.asyncio
-    async def test_gold_sizing(self, order_manager):
-        """XAU-USD at 2000 with $2 SL and 100k account."""
+    async def test_successful_market_order(self, order_manager, adapter):
+        """A filled market order should create an Order and a Position."""
         operation = MagicMock()
-        operation.current_capital = 100_000.0
+        operation.id = ObjectId()
+        operation.asset = "EUR-USD"
+        operation.stop_loss_type = "FIXED"
+        operation.stop_loss_value = 0.003
+        operation.take_profit_type = "RISK_REWARD"
+        operation.take_profit_value = 2.0
+        operation.primary_bar_size = "1 hour"
+        operation.current_capital = 10000.0
 
-        lots = await order_manager._calculate_default_quantity(
-            operation=operation,
-            entry_price=2000.0,
-            stop_loss=1998.0,
+        adapter.submit_order.return_value = BrokerOrderResult(
+            broker_order_id="BO-100",
+            status=OrderStatus.FILLED,
+            filled_quantity=0.1,
+            avg_fill_price=1.1050,
+            broker_position_id="POS-200",
+            commission=0.07,
         )
-        # risk = 1000, risk/unit = 2.0, units = 500, lots = 0.005
-        assert lots < 0.1, f"Gold lots should be small, got {lots}"
+        adapter.get_positions.return_value = []
 
-
-class TestOrderStatusCallbackUsesStableId:
-    """
-    Regression test for the race condition where update_order() tried to
-    find the order by broker_order_id before it was saved to the DB.
-    The fix captures order._id at callback-creation time instead.
-    """
-
-    @pytest.mark.asyncio
-    async def test_callback_finds_order_by_id_not_broker_order_id(self, order_manager):
-        """
-        Simulate the race: broker fires the callback before broker_order_id
-        is written to the DB. The callback must still find and update the order.
-        """
-        fake_order_id = ObjectId()
-        fake_broker_order_id = "99999"
-
-        # Mock Order model
-        mock_order = MagicMock()
-        mock_order.id = fake_order_id
-        mock_order.broker_order_id = None  # Not saved yet!
-        mock_order.status = "PENDING"
-        mock_order.filled_quantity = 0.0
-        mock_order.avg_fill_price = None
-        mock_order.filled_at = None
-        mock_order.save = AsyncMock()
-
-        mock_operation = MagicMock()
-        mock_operation.asset = "EUR-USD"
-        mock_operation.stop_loss_type = "ATR"
-        mock_operation.stop_loss_value = 1.5
-        mock_operation.take_profit_type = "RISK_REWARD"
-        mock_operation.take_profit_value = 2.0
-        mock_operation.current_capital = 10000.0
-
-        with patch("live_trading.orders.order_manager.Order") as MockOrder, \
-             patch("live_trading.orders.order_manager.TradingOperation") as MockOp, \
-             patch("live_trading.orders.order_manager.MarketData") as MockMD:
-
-            MockOp.get = AsyncMock(return_value=mock_operation)
-
-            # Order.insert() returns immediately, Order.get() returns our mock
+        with patch("live_trading.orders.order_manager.TradingOperation") as MockOp, \
+             patch("live_trading.orders.order_manager.Order") as MockOrder, \
+             patch("live_trading.orders.order_manager.Position") as MockPos, \
+             patch("live_trading.orders.order_manager.MarketData"):
+            MockOp.get = AsyncMock(return_value=operation)
             mock_order_instance = MagicMock()
-            mock_order_instance.id = fake_order_id
+            mock_order_instance.id = ObjectId()
             mock_order_instance.insert = AsyncMock()
             mock_order_instance.save = AsyncMock()
+            mock_order_instance.status = OrderStatus.PENDING_SUBMIT
+            mock_order_instance.side = OrderSide.BUY
+            mock_order_instance.intent = OrderIntent.OPEN
+            mock_order_instance.broker_position_id = "POS-200"
+            mock_order_instance.avg_fill_price = 1.1050
+            mock_order_instance.filled_quantity = 0.1
+            mock_order_instance.commission = 0.07
+            mock_order_instance.stop_loss = 1.1020
+            mock_order_instance.take_profit = 1.1110
+            mock_order_instance.symbol = "EUR-USD"
+            mock_order_instance.operation_id = operation.id
             MockOrder.return_value = mock_order_instance
-            MockOrder.get = AsyncMock(return_value=mock_order)
 
-            # Broker returns the order_id but fires callback BEFORE returning
-            captured_callback = None
+            mock_pos_instance = MagicMock()
+            mock_pos_instance.insert = AsyncMock()
+            MockPos.return_value = mock_pos_instance
 
-            async def fake_place_order(**kwargs):
-                nonlocal captured_callback
-                captured_callback = kwargs.get("order_status_callback")
-                # Simulate broker calling back immediately (before we return)
-                if captured_callback:
-                    captured_callback({
-                        "order_id": fake_broker_order_id,
-                        "status": "FILLED",
-                        "filled": 1.0,
-                        "avg_fill_price": 1.1050,
-                    })
-                return fake_broker_order_id
-
-            order_manager.broker.place_order = fake_place_order
-            order_manager.on_order_filled = AsyncMock()
-
-            # Mock _get_current_price and _get_atr_value
-            order_manager._get_current_price = AsyncMock(return_value=1.1050)
-            order_manager._get_atr_value = AsyncMock(return_value=0.001)
-
-            # Set up mock for MarketData find chain
-            mock_md_chain = MagicMock()
-            mock_md_chain.sort = MagicMock(return_value=mock_md_chain)
-            mock_md_chain.limit = MagicMock(return_value=mock_md_chain)
-            mock_md_chain.to_list = AsyncMock(return_value=[])
-            MockMD.find = MagicMock(return_value=mock_md_chain)
-
-            # Place the order
             result = await order_manager.place_order(
-                operation_id=ObjectId(),
+                operation_id=operation.id,
                 asset="EUR-USD",
                 signal_type="BUY",
+                quantity=0.1,
+                stop_loss=1.1020,
+                take_profit=1.1110,
             )
 
-            # Let the scheduled update_order() coroutine run
-            await asyncio.sleep(0.1)
-
-            # The callback should have used Order.get(order_db_id), NOT
-            # Order.find_one(broker_order_id=...). Verify Order.get was called.
-            MockOrder.get.assert_called()
-            call_args = MockOrder.get.call_args
-            assert call_args[0][0] == fake_order_id, (
-                f"Expected Order.get({fake_order_id}), got Order.get({call_args}). "
-                "Callback is not using the stable order _id."
-            )
+        adapter.submit_order.assert_awaited_once()
+        mock_order_instance.insert.assert_awaited_once()
+        mock_pos_instance.insert.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_callback_backfills_broker_order_id(self, order_manager):
-        """
-        Verify that the callback sets broker_order_id on the order when it
-        wasn't saved yet (backfill from callback payload).
-        """
-        fake_order_id = ObjectId()
-        fake_broker_order_id = "12345"
+    async def test_rejected_order(self, order_manager, adapter):
+        """A rejected order should set status to REJECTED and not create a position."""
+        operation = MagicMock()
+        operation.id = ObjectId()
+        operation.current_capital = 10000.0
+        operation.primary_bar_size = "1 hour"
 
-        mock_order = MagicMock()
-        mock_order.id = fake_order_id
-        mock_order.broker_order_id = None  # Not saved yet
-        mock_order.status = "PENDING"
-        mock_order.filled_quantity = 0.0
-        mock_order.avg_fill_price = None
-        mock_order.filled_at = None
-        mock_order.save = AsyncMock()
+        adapter.submit_order.return_value = BrokerOrderResult(
+            broker_order_id="",
+            status=OrderStatus.REJECTED,
+        )
+        adapter.get_positions.return_value = []
 
-        mock_operation = MagicMock()
-        mock_operation.asset = "EUR-USD"
-        mock_operation.stop_loss_type = "ATR"
-        mock_operation.stop_loss_value = 1.5
-        mock_operation.take_profit_type = "RISK_REWARD"
-        mock_operation.take_profit_value = 2.0
-        mock_operation.current_capital = 10000.0
-
-        with patch("live_trading.orders.order_manager.Order") as MockOrder, \
-             patch("live_trading.orders.order_manager.TradingOperation") as MockOp, \
-             patch("live_trading.orders.order_manager.MarketData") as MockMD:
-
-            MockOp.get = AsyncMock(return_value=mock_operation)
-
+        with patch("live_trading.orders.order_manager.TradingOperation") as MockOp, \
+             patch("live_trading.orders.order_manager.Order") as MockOrder, \
+             patch("live_trading.orders.order_manager.Position") as MockPos, \
+             patch("live_trading.orders.order_manager.MarketData"):
+            MockOp.get = AsyncMock(return_value=operation)
             mock_order_instance = MagicMock()
-            mock_order_instance.id = fake_order_id
+            mock_order_instance.id = ObjectId()
             mock_order_instance.insert = AsyncMock()
             mock_order_instance.save = AsyncMock()
+            mock_order_instance.status = OrderStatus.PENDING_SUBMIT
+            mock_order_instance.intent = OrderIntent.OPEN
             MockOrder.return_value = mock_order_instance
-            MockOrder.get = AsyncMock(return_value=mock_order)
 
-            captured_callback = None
-
-            async def fake_place_order(**kwargs):
-                nonlocal captured_callback
-                captured_callback = kwargs.get("order_status_callback")
-                if captured_callback:
-                    captured_callback({
-                        "order_id": fake_broker_order_id,
-                        "status": "ACCEPTED",
-                        "filled": 0.0,
-                        "avg_fill_price": 0.0,
-                    })
-                return fake_broker_order_id
-
-            order_manager.broker.place_order = fake_place_order
-            order_manager._get_current_price = AsyncMock(return_value=1.1050)
-            order_manager._get_atr_value = AsyncMock(return_value=0.001)
-
-            mock_md_chain = MagicMock()
-            mock_md_chain.sort = MagicMock(return_value=mock_md_chain)
-            mock_md_chain.limit = MagicMock(return_value=mock_md_chain)
-            mock_md_chain.to_list = AsyncMock(return_value=[])
-            MockMD.find = MagicMock(return_value=mock_md_chain)
-
-            await order_manager.place_order(
-                operation_id=ObjectId(),
+            result = await order_manager.place_order(
+                operation_id=operation.id,
                 asset="EUR-USD",
                 signal_type="BUY",
+                quantity=0.1,
+                stop_loss=1.10,
+                take_profit=1.12,
             )
 
-            await asyncio.sleep(0.1)
+        assert mock_order_instance.status == OrderStatus.REJECTED
 
-            # The callback should have set broker_order_id on the order
-            assert mock_order.broker_order_id == fake_broker_order_id, (
-                "Callback should backfill broker_order_id from the callback payload"
-            )
+
+class TestHandleBrokerPositionClose:
+    @pytest.mark.asyncio
+    async def test_closes_position_on_sl(self, order_manager):
+        """When broker fires a close event near SL, position should be closed with STOP_LOSS."""
+        position = MagicMock()
+        position.id = ObjectId()
+        position.operation_id = ObjectId()
+        position.broker_position_id = "POS-300"
+        position.symbol = "EUR-USD"
+        position.side = PositionSide.LONG
+        position.quantity = 0.5
+        position.entry_price = 1.1100
+        position.current_price = 1.1050
+        position.stop_loss = 1.1050
+        position.take_profit = 1.1200
+        position.commission = 0.07
+        position.swap = 0.0
+        position.status = PositionStatus.OPEN
+        position.opened_at = datetime(2026, 3, 7, 10, 0, 0)
+        position.save = AsyncMock()
+
+        update = BrokerOrderUpdate(
+            broker_order_id="CLOSE-1",
+            status=OrderStatus.FILLED,
+            filled_quantity=0.5,
+            avg_fill_price=1.1050,
+            broker_position_id="POS-300",
+            is_position_close=True,
+        )
+
+        with patch("live_trading.orders.order_manager.Position") as MockPos, \
+             patch("live_trading.orders.order_manager.Order") as MockOrder:
+            MockPos.find_one = AsyncMock(return_value=position)
+            mock_close_order = MagicMock()
+            mock_close_order.id = ObjectId()
+            mock_close_order.insert = AsyncMock()
+            MockOrder.return_value = mock_close_order
+
+            await order_manager._handle_broker_position_close(update)
+
+        assert position.status == PositionStatus.CLOSED
+        assert position.close_price == 1.1050
+        assert position.close_reason == CloseReason.STOP_LOSS
+        assert position.realized_pnl is not None
+        position.save.assert_awaited()

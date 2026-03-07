@@ -15,10 +15,9 @@ from live_trading.engine.trading_engine import TradingEngine
 
 logger = logging.getLogger(__name__)
 from live_trading.models.trading_operation import TradingOperation
-from live_trading.models.transaction import Transaction
 from live_trading.models.position import Position
 from live_trading.models.order import Order
-from live_trading.models.trade import Trade
+from live_trading.brokers.middleware.types import PositionStatus, OrderStatus
 from live_trading.config import config
 
 app = FastAPI(title="Live Trading System API", version="0.1.0")
@@ -274,21 +273,27 @@ async def list_strategies():
 @app.get("/api/operations/{operation_id}/positions")
 async def get_positions(
     operation_id: str,
+    status_filter: Optional[str] = None,
     engine: TradingEngine = Depends(get_trading_engine),
 ):
-    """Get positions for an operation, enriched with live spot prices from the broker cache."""
+    """Get positions for an operation.
+
+    Query params:
+        status_filter: "OPEN", "CLOSED", or omit for all.
+    """
     try:
         op_id = ObjectId(operation_id)
     except:
         raise HTTPException(status_code=400, detail="Invalid operation ID")
 
-    positions = await Position.find(
-        Position.operation_id == op_id
-    ).sort(-Position.opened_at).to_list()
+    query = {"operation_id": op_id}
+    if status_filter:
+        query["status"] = status_filter.upper()
 
-    # Live spot-price cache: {symbol_id: {bid, ask, mid}} — updated on every tick, zero latency.
+    positions = await Position.find(query).sort(-Position.opened_at).to_list()
+
     live_spot = getattr(engine.broker, '_last_spot_prices', {})
-    symbol_cache = getattr(engine.broker, '_symbol_cache', {})   # {asset: symbol_id}
+    symbol_cache = getattr(engine.broker, '_symbol_cache', {})
 
     result = []
     for pos in positions:
@@ -296,21 +301,22 @@ async def get_positions(
         unrealized_pnl = pos.unrealized_pnl
         unrealized_pnl_pct = pos.unrealized_pnl_pct
 
-        symbol_id = symbol_cache.get(pos.contract_symbol)
-        if symbol_id and symbol_id in live_spot:
-            spot = live_spot[symbol_id]
-            position_type = "LONG" if pos.quantity > 0 else "SHORT"
-            current_price = spot["bid"] if position_type == "LONG" else spot["ask"]
-            direction = 1.0 if pos.quantity > 0 else -1.0
-            volume = abs(pos.quantity)
-            gross_pnl = (current_price - pos.entry_price) * direction * volume
-            notional = pos.entry_price * volume
-            unrealized_pnl = gross_pnl
-            unrealized_pnl_pct = (gross_pnl / notional * 100) if notional > 0 else 0.0
+        if pos.status == PositionStatus.OPEN:
+            symbol_id = symbol_cache.get(pos.symbol)
+            if symbol_id and symbol_id in live_spot:
+                spot = live_spot[symbol_id]
+                current_price = spot["bid"] if pos.side.value == "LONG" else spot["ask"]
+                direction = 1.0 if pos.side.value == "LONG" else -1.0
+                gross_pnl = (current_price - pos.entry_price) * direction * pos.quantity
+                notional = pos.entry_price * pos.quantity
+                unrealized_pnl = gross_pnl
+                unrealized_pnl_pct = (gross_pnl / notional * 100) if notional > 0 else 0.0
 
         result.append({
             "id": str(pos.id),
-            "contract_symbol": pos.contract_symbol,
+            "broker_position_id": pos.broker_position_id,
+            "symbol": pos.symbol,
+            "side": pos.side.value,
             "quantity": pos.quantity,
             "entry_price": pos.entry_price,
             "current_price": current_price,
@@ -318,6 +324,13 @@ async def get_positions(
             "unrealized_pnl_pct": unrealized_pnl_pct,
             "stop_loss": pos.stop_loss,
             "take_profit": pos.take_profit,
+            "status": pos.status.value,
+            "close_price": pos.close_price,
+            "close_reason": pos.close_reason.value if pos.close_reason else None,
+            "realized_pnl": pos.realized_pnl,
+            "realized_pnl_pct": pos.realized_pnl_pct,
+            "total_commission": pos.total_commission,
+            "duration_seconds": pos.duration_seconds,
             "opened_at": pos.opened_at,
             "closed_at": pos.closed_at,
         })
@@ -325,64 +338,38 @@ async def get_positions(
     return result
 
 
-# Transactions endpoints
-@app.get("/api/operations/{operation_id}/transactions")
-async def get_transactions(operation_id: str):
-    """Get transactions for an operation"""
-    try:
-        op_id = ObjectId(operation_id)
-    except:
-        raise HTTPException(status_code=400, detail="Invalid operation ID")
-
-    transactions = await Transaction.find(
-        Transaction.operation_id == op_id
-    ).sort(-Transaction.executed_at).to_list()
-
-    return [
-        {
-            "id": str(txn.id),
-            "transaction_type": txn.transaction_type,
-            "transaction_role": txn.transaction_role,
-            "position_type": txn.position_type,
-            "price": txn.price,
-            "quantity": txn.quantity,
-            "commission": txn.commission,
-            "profit": txn.profit,
-            "profit_pct": txn.profit_pct,
-            "executed_at": txn.executed_at
-        }
-        for txn in transactions
-    ]
-
-
-# Trades endpoints
 @app.get("/api/operations/{operation_id}/trades")
 async def get_trades(operation_id: str):
-    """Get completed trades for an operation"""
+    """Get completed trades (closed positions) for an operation."""
     try:
         op_id = ObjectId(operation_id)
     except:
         raise HTTPException(status_code=400, detail="Invalid operation ID")
 
-    trades = await Trade.find(
-        Trade.operation_id == op_id
-    ).sort(-Trade.exit_time).to_list()
+    closed = await Position.find(
+        Position.operation_id == op_id,
+        Position.status == PositionStatus.CLOSED,
+    ).sort(-Position.closed_at).to_list()
 
     return [
         {
-            "id": str(trade.id),
-            "position_type": trade.position_type,
-            "entry_price": trade.entry_price,
-            "exit_price": trade.exit_price,
-            "quantity": trade.quantity,
-            "pnl": trade.pnl,
-            "pnl_pct": trade.pnl_pct,
-            "total_commission": trade.total_commission,
-            "entry_time": trade.entry_time,
-            "exit_time": trade.exit_time,
-            "duration_seconds": trade.duration_seconds
+            "id": str(pos.id),
+            "broker_position_id": pos.broker_position_id,
+            "symbol": pos.symbol,
+            "side": pos.side.value,
+            "entry_price": pos.entry_price,
+            "close_price": pos.close_price,
+            "quantity": pos.quantity,
+            "realized_pnl": pos.realized_pnl,
+            "realized_pnl_pct": pos.realized_pnl_pct,
+            "close_reason": pos.close_reason.value if pos.close_reason else None,
+            "total_commission": pos.total_commission,
+            "total_swap": pos.total_swap,
+            "duration_seconds": pos.duration_seconds,
+            "opened_at": pos.opened_at,
+            "closed_at": pos.closed_at,
         }
-        for trade in trades
+        for pos in closed
     ]
 
 
@@ -397,21 +384,29 @@ async def get_orders(operation_id: str):
 
     orders = await Order.find(
         Order.operation_id == op_id
-    ).sort(-Order.placed_at).to_list()
+    ).sort(-Order.created_at).to_list()
 
     return [
         {
             "id": str(order.id),
             "broker_order_id": order.broker_order_id,
-            "order_type": order.order_type,
-            "action": order.action,
-            "quantity": order.quantity,
-            "price": order.price,
-            "status": order.status,
+            "broker_position_id": order.broker_position_id,
+            "symbol": order.symbol,
+            "side": order.side.value,
+            "order_type": order.order_type.value,
+            "requested_quantity": order.requested_quantity,
+            "requested_price": order.requested_price,
+            "stop_loss": order.stop_loss,
+            "take_profit": order.take_profit,
+            "status": order.status.value,
             "filled_quantity": order.filled_quantity,
             "avg_fill_price": order.avg_fill_price,
-            "placed_at": order.placed_at,
-            "filled_at": order.filled_at
+            "intent": order.intent.value,
+            "close_reason": order.close_reason.value if order.close_reason else None,
+            "source": order.source.value,
+            "created_at": order.created_at,
+            "submitted_at": order.submitted_at,
+            "filled_at": order.filled_at,
         }
         for order in orders
     ]
@@ -640,28 +635,28 @@ async def get_operation_stats(operation_id: str):
     if not operation:
         raise HTTPException(status_code=404, detail="Operation not found")
 
-    # Get additional stats
-    trades = await Trade.find(Trade.operation_id == op_id).to_list()
-    positions = await Position.find(
+    closed_positions = await Position.find(
         Position.operation_id == op_id,
-        Position.closed_at == None
+        Position.status == PositionStatus.CLOSED,
+    ).to_list()
+    open_positions = await Position.find(
+        Position.operation_id == op_id,
+        Position.status == PositionStatus.OPEN,
     ).to_list()
 
-    # Unrealized P&L from open positions
-    total_unrealized_pnl = sum(p.unrealized_pnl or 0.0 for p in positions)
+    total_unrealized_pnl = sum(p.unrealized_pnl or 0.0 for p in open_positions)
 
     return {
         "operation_id": str(operation.id),
         "broker_type": operation.broker_type,
-        "total_trades": len(trades),
-        "winning_trades": len([t for t in trades if t.pnl > 0]),
-        "losing_trades": len([t for t in trades if t.pnl < 0]),
+        "total_trades": len(closed_positions),
+        "winning_trades": len([p for p in closed_positions if (p.realized_pnl or 0) > 0]),
+        "losing_trades": len([p for p in closed_positions if (p.realized_pnl or 0) < 0]),
         "total_pnl": operation.total_pnl,
         "total_pnl_pct": operation.total_pnl_pct,
-        "open_positions": len(positions),
+        "open_positions": len(open_positions),
         "unrealized_pnl": total_unrealized_pnl,
         "current_capital": operation.current_capital,
-        # last_synced_at lets the UI warn when data may be stale
         "last_synced_at": operation.updated_at.isoformat() if operation.updated_at else None,
     }
 
@@ -686,7 +681,7 @@ async def reconcile_operation(
         raise HTTPException(status_code=404, detail="Operation not found")
 
     try:
-        await engine._sync_positions_from_broker(operation)
+        await engine.sync_positions_from_broker(operation)
         return {"message": "Reconciliation complete", "operation_id": operation_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Reconciliation failed: {e}")
@@ -696,25 +691,23 @@ async def reconcile_operation(
 async def get_overall_stats(engine: TradingEngine = Depends(get_trading_engine)):
     """Get overall statistics across all operations, with live account info from broker"""
     operations = await TradingOperation.find_all().to_list()
-    all_trades = await Trade.find_all().to_list()
+    all_closed = await Position.find(Position.status == PositionStatus.CLOSED).to_list()
 
     total_pnl = sum(op.total_pnl for op in operations)
 
-    # Live account info straight from the broker
-    account_info = await engine.broker.get_account_info()
+    account_info = await engine.adapter.get_account_info()
 
     return {
         "total_operations": len(operations),
         "active_operations": len([op for op in operations if op.status == "active"]),
-        "total_trades": len(all_trades),
+        "total_trades": len(all_closed),
         "total_pnl": total_pnl,
-        # Live broker account data
-        "balance": account_info.get("balance", 0.0),
-        "equity": account_info.get("equity", 0.0),
-        "floating_pnl": account_info.get("unrealized_pnl", 0.0),
-        "margin_used": account_info.get("margin_used", 0.0),
-        "margin_available": account_info.get("margin_available", 0.0),
-        "currency": account_info.get("currency", ""),
+        "balance": account_info.balance,
+        "equity": account_info.equity or 0.0,
+        "floating_pnl": 0.0,
+        "margin_used": account_info.margin_used or 0.0,
+        "margin_available": account_info.margin_free or 0.0,
+        "currency": account_info.currency,
     }
 
 
@@ -794,29 +787,35 @@ async def startup_event():
             f"Supported types: IBKR, OANDA, PEPPERSTONE, CTRADER"
         )
 
-    # Initialize journal manager
+    # Build the broker adapter
+    from live_trading.brokers.adapters.ctrader_adapter import CTraderAdapter as _CTA
+
+    if config.BROKER_TYPE == "CTRADER":
+        adapter = _CTA(broker)
+    else:
+        raise ValueError(
+            f"No BrokerAdapter implemented for {config.BROKER_TYPE}. "
+            "Only CTRADER is currently supported."
+        )
+
     journal_manager = JournalManager()
 
-    # Initialize trading engine
-    trading_engine = TradingEngine(broker, journal_manager)
+    trading_engine = TradingEngine(broker, adapter, journal_manager)
     await trading_engine.initialize()
 
-    # Recover from journal (crash recovery)
     await trading_engine.recover_from_journal()
 
-    # Start background task to periodically sync positions from broker
     import asyncio
     async def periodic_position_sync():
-        """Periodically sync positions from broker to database"""
         while True:
             try:
-                await asyncio.sleep(30)  # Sync every 30 seconds
+                await asyncio.sleep(30)
                 if trading_engine:
                     active_operations = await TradingOperation.find(
                         TradingOperation.status == "active"
                     ).to_list()
                     for operation in active_operations:
-                        await trading_engine._sync_positions_from_broker(operation)
+                        await trading_engine.sync_positions_from_broker(operation)
             except Exception as e:
                 logger.error(f"Error in periodic position sync: {e}", exc_info=True)
 
