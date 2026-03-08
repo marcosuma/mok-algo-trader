@@ -33,6 +33,7 @@ from forex_strategies.momentum_strategy import MomentumStrategy, TrendMomentumSt
 from forex_strategies.market_structure_strategy import MarketStructureStrategy
 from forex_strategies.institutional_flow_strategy import InstitutionalFlowStrategy
 from forex_strategies.adaptive_multi_indicator_strategy import AdaptiveMultiIndicatorStrategy
+from forex_strategies.multi_timeframe_strategy import AdaptiveMultiTimeframeStrategy
 from forex_strategies.buy_and_hold_strategy import BuyAndHoldStrategy
 from technical_indicators.technical_indicators import TechnicalIndicators
 
@@ -41,25 +42,41 @@ from technical_indicators.technical_indicators import TechnicalIndicators
 # Data loading
 # ---------------------------------------------------------------------------
 
-def load_data(data_path: str) -> pd.DataFrame:
-    """Load OHLCV data from a file or directory; compute indicators if missing."""
+def load_data(data_path: str, bar_size: str = "1 hour") -> pd.DataFrame:
+    """Load OHLCV data from a file or directory; compute indicators if missing.
+
+    When data_path is a directory containing multiple bar-size files (e.g.
+    data-AUD-CASH-IDEALPRO-CAD-1 Y-1 hour.csv), only the file whose name ends
+    with '-{bar_size}.csv' is loaded.  If no match is found the first CSV is
+    used and a warning is printed.
+    """
     path = Path(data_path)
 
     if path.is_file():
-        csv_files = [path]
+        csv_file = path
     elif path.is_dir():
-        csv_files = sorted(path.glob("*.csv"))
-        if not csv_files:
+        all_csvs = sorted(path.glob("*.csv"))
+        if not all_csvs:
             raise FileNotFoundError(f"No CSV files found in {data_path}")
+
+        # Pick the file whose name ends with the requested bar size
+        suffix = f"-{bar_size}.csv"
+        matching = [f for f in all_csvs if f.name.endswith(suffix)]
+        if matching:
+            csv_file = matching[0]
+        else:
+            csv_file = all_csvs[0]
+            print(
+                f"WARNING: No file ending with '{suffix}' found in {data_path}. "
+                f"Using: {csv_file.name}\n"
+                f"Available files:\n" +
+                "\n".join(f"  {f.name}" for f in all_csvs)
+            )
+        print(f"Selected: {csv_file.name}")
     else:
         raise FileNotFoundError(f"Path not found: {data_path}")
 
-    dfs = []
-    for f in csv_files:
-        df = pd.read_csv(f, index_col=0)
-        dfs.append(df)
-
-    df = pd.concat(dfs).sort_index()
+    df = pd.read_csv(csv_file, index_col=0)
 
     # Normalise column names
     df.columns = [c.lower() for c in df.columns]
@@ -97,7 +114,7 @@ def load_data(data_path: str) -> pd.DataFrame:
 # Strategy config grid
 # ---------------------------------------------------------------------------
 
-def build_configs() -> list[tuple[str, type, dict]]:
+def build_configs(data_dir: str = "data", contract_name: str = "") -> list[tuple[str, type, dict]]:
     """Return list of (display_name, strategy_class, params_dict) for every config."""
     configs: list[tuple[str, type, dict]] = []
 
@@ -147,6 +164,21 @@ def build_configs() -> list[tuple[str, type, dict]]:
             "AdaptiveMultiIndicatorStrategy",
             AdaptiveMultiIndicatorStrategy,
             {"adx_trend_threshold": adx_thresh, "atr_stop_multiplier": atr_stop},
+        ))
+
+    # AdaptiveMultiTimeframeStrategy: 2 × 2 = 4 configs
+    # Loads higher-TF CSVs from data_dir/contract_name if available;
+    # silently degrades to single-TF (AdaptiveMultiIndicatorStrategy) otherwise.
+    for adx_thresh, atr_stop in itertools.product([20, 25], [1.5, 2.0]):
+        configs.append((
+            "AdaptiveMultiTimeframeStrategy",
+            AdaptiveMultiTimeframeStrategy,
+            {
+                "adx_trend_threshold": adx_thresh,
+                "atr_stop_multiplier": atr_stop,
+                "data_dir": data_dir,
+                "contract_name": contract_name,
+            },
         ))
 
     # BuyAndHoldStrategy: 1 config (baseline — excluded from ranking)
@@ -487,7 +519,7 @@ def main():
     parser.add_argument("--symbol", default="XAUUSD", help="Symbol label used in output filename")
     parser.add_argument("--data", default="data/XAU-USD/", help="Data directory containing CSV(s)")
     parser.add_argument("--data-file", help="Explicit CSV file path (overrides --data)")
-    parser.add_argument("--bar-size", default="1h", help="Bar size label (informational only)")
+    parser.add_argument("--bar-size", default="1 hour", help="Bar size to select from the data directory (e.g. '1 hour', '4 hours', '15 mins', '1 day')")
     parser.add_argument("--warmup", type=int, default=200, help="Warmup bars per window")
     parser.add_argument("--test-bars", type=int, default=500, help="Test bars per window")
     parser.add_argument("--step", type=int, default=500, help="Step between window starts")
@@ -496,11 +528,17 @@ def main():
 
     data_path = args.data_file if args.data_file else args.data
 
-    print(f"Loading data from: {data_path}")
-    df = load_data(data_path)
+    print(f"Loading data from: {data_path}  [bar-size: {args.bar_size}]")
+    df = load_data(data_path, bar_size=args.bar_size)
+
+    # Derive data_dir / contract_name for multi-timeframe CSV loading
+    p = Path(data_path).resolve()
+    contract_dir = p.parent if p.is_file() else p
+    data_dir = str(contract_dir.parent)
+    contract_name = contract_dir.name
 
     print("\nBuilding strategy configs...")
-    configs = build_configs()
+    configs = build_configs(data_dir=data_dir, contract_name=contract_name)
     print(f"Total configs: {len(configs)}")
 
     results_df = walk_forward(df, configs, args.warmup, args.test_bars, args.step)
