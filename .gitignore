@@ -156,3 +156,6 @@ daemon_status.json
 # PID files
 *.pid
 live_trading.pid
+
+# cTrader token file (contains secrets)
+.ctrader_tokens.json

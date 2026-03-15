@@ -77,6 +77,10 @@ class CTraderBroker(BaseBroker):
             logger.warning(
                 "ctrader-open-api module not found. Please install it: pip install ctrader-open-api"
             )
+
+        from live_trading.brokers.ctrader_token_manager import get_token_manager
+        self._token_manager = get_token_manager()
+
         self.client: Optional[Client] = None
         self.connected = False
         self.authenticated = False
@@ -349,11 +353,11 @@ class CTraderBroker(BaseBroker):
 
         # Get account list - use ProtoOAGetAccountListByAccessTokenReq
         if self.client:
-            access_token = config.CTRADER_ACCESS_TOKEN
+            access_token = self._token_manager.access_token
             if not access_token:
                 error_msg = (
-                    "CTRADER_ACCESS_TOKEN is not set - cannot retrieve accounts. "
-                    "Generate one with 'trading' scope: python -m live_trading.scripts.get_ctrader_token"
+                    "No access token available — run: "
+                    "python -m live_trading.scripts.get_ctrader_token"
                 )
                 logger.error(f"[Reactor Thread] ✗ {error_msg}")
                 self._auth_error = error_msg
@@ -421,10 +425,10 @@ class CTraderBroker(BaseBroker):
 
         # Authenticate account
         if self.client:
-            access_token = config.CTRADER_ACCESS_TOKEN
+            access_token = self._token_manager.access_token
             if not access_token:
                 error_msg = (
-                    "CTRADER_ACCESS_TOKEN is not set. Generate one with 'trading' scope: "
+                    "No access token available — run: "
                     "python -m live_trading.scripts.get_ctrader_token"
                 )
                 logger.error(f"[Reactor Thread] ✗ {error_msg}")
@@ -496,6 +500,27 @@ class CTraderBroker(BaseBroker):
             except Exception:
                 pass
         self._auth_error = str(failure)
+
+    def _handle_token_expired(self):
+        """Attempt to refresh the token and re-authenticate.  Runs on reactor thread."""
+        logger.warning("[TOKEN] Access token appears expired — attempting refresh...")
+        self.authenticated = False
+        if self._token_manager.force_refresh():
+            logger.info("[TOKEN] Refresh succeeded — re-authenticating account...")
+            if self.client and self.account_id:
+                try:
+                    request = ProtoOAAccountAuthReq()
+                    request.ctidTraderAccountId = self.account_id
+                    request.accessToken = self._token_manager.access_token
+                    deferred = self.client.send(request)
+                    deferred.addCallbacks(self._on_account_auth_success, self._on_auth_error)
+                except Exception as e:
+                    logger.error(f"[TOKEN] Re-auth failed after refresh: {e}", exc_info=True)
+        else:
+            logger.error(
+                "[TOKEN] Refresh failed — manual token regeneration required: "
+                "python -m live_trading.scripts.get_ctrader_token"
+            )
 
     def _on_disconnected(self, client: Client, reason):
         """Callback when client disconnects - runs on reactor thread"""
@@ -578,14 +603,15 @@ class CTraderBroker(BaseBroker):
                 # Handled via deferred callback in fetch_historical_data
                 logger.debug(f"[Reactor Thread] Received trendbar response with {len(extracted.trendbar) if hasattr(extracted, 'trendbar') else 0} bars")
             elif message_type == "ProtoOAErrorRes":
-                # Handle error responses - dump all fields for debugging
                 error_code = getattr(extracted, 'errorCode', 'UNKNOWN')
                 description = getattr(extracted, 'description', 'No description')
-                # Log the full protobuf message for debugging
                 logger.error(f"[Reactor Thread] ✗ cTrader API Error: {error_code} - {description}")
                 logger.error(f"[Reactor Thread] Full error response: {extracted}")
                 self._auth_error = f"API Error: {error_code} - {description}"
-                # Resolve any pending order futures on generic API error
+
+                if "not authorized" in description.lower() or error_code == "INVALID_REQUEST":
+                    self._handle_token_expired()
+
                 resolved_key = None
                 for key, (future, loop, _) in self._pending_order_futures.items():
                     if not future.done():
@@ -988,10 +1014,11 @@ class CTraderBroker(BaseBroker):
                 logger.error("  Please set these variables before starting the application.")
                 return False
 
-            # Access token is optional at connect time but required for trading
-            if not config.CTRADER_ACCESS_TOKEN:
+            # Ensure we have a valid access token (auto-refresh if possible)
+            current_token = self._token_manager.access_token
+            if not current_token:
                 logger.warning(
-                    "⚠️ CTRADER_ACCESS_TOKEN is not set. App will authenticate but "
+                    "⚠️ No access token available. App will authenticate but "
                     "account access and trading will fail. Generate one with: "
                     "python -m live_trading.scripts.get_ctrader_token"
                 )
@@ -1008,7 +1035,8 @@ class CTraderBroker(BaseBroker):
             logger.info(f"Environment: {environment}")
             logger.info(f"Host: {host}:{port}")
             logger.info(f"Client ID: {config.CTRADER_CLIENT_ID[:8]}...")
-            logger.info(f"Access Token: {config.CTRADER_ACCESS_TOKEN[:8] if config.CTRADER_ACCESS_TOKEN else 'NOT SET'}...")
+            logger.info(f"Access Token: {current_token[:8] if current_token else 'NOT SET'}...")
+            logger.info(f"Refresh Token: {'available' if self._token_manager.has_refresh_token() else 'NOT SET'}")
 
             # Start reactor FIRST (must be running before startService)
             self._start_reactor()
@@ -1104,7 +1132,7 @@ class CTraderBroker(BaseBroker):
                 logger.error("✗ Authentication timeout - no response from server")
                 logger.error("  Possible causes:")
                 logger.error("  - Invalid CTRADER_CLIENT_ID or CTRADER_CLIENT_SECRET")
-                logger.error("  - Invalid or expired CTRADER_ACCESS_TOKEN")
+                logger.error("  - Invalid or expired access token (auto-refresh may have failed)")
                 logger.error("  - No trading accounts linked to this access token")
                 return False
 
@@ -1263,11 +1291,32 @@ class CTraderBroker(BaseBroker):
             RECONNECT_THRESHOLD = 120  # seconds - force reconnect if no messages
             CHECK_INTERVAL = 30  # seconds between checks
             STATUS_LOG_INTERVAL = 300  # Log subscription details every 5 minutes
+            TOKEN_CHECK_INTERVAL = 3600  # check token expiry every hour
             last_status_log = datetime.utcnow()
+            last_token_check = datetime.utcnow()
 
             while not self._shutdown_requested:
                 try:
                     await asyncio.sleep(CHECK_INTERVAL)
+
+                    # Proactive token refresh (check once per hour)
+                    if (datetime.utcnow() - last_token_check).total_seconds() > TOKEN_CHECK_INTERVAL:
+                        last_token_check = datetime.utcnow()
+                        if self._token_manager.has_refresh_token() and self._token_manager._is_expired():
+                            logger.info("[TOKEN] Proactive token refresh (expiring soon)...")
+                            if self._token_manager.force_refresh():
+                                logger.info("[TOKEN] Proactive refresh succeeded — re-authenticating...")
+                                if self.client and self.account_id and self.connected:
+                                    try:
+                                        def _reauth():
+                                            request = ProtoOAAccountAuthReq()
+                                            request.ctidTraderAccountId = self.account_id
+                                            request.accessToken = self._token_manager.access_token
+                                            d = self.client.send(request)
+                                            d.addCallbacks(self._on_account_auth_success, self._on_auth_error)
+                                        reactor.callFromThread(_reauth)
+                                    except Exception as e:
+                                        logger.error(f"[TOKEN] Re-auth after proactive refresh failed: {e}")
 
                     # Calculate time since last message
                     seconds_since_message = None
