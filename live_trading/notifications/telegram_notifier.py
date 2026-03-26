@@ -28,7 +28,9 @@ _WARNING_TYPES = (ConnectionStale,)
 
 def _default_send(bot_token: str, chat_id: str, text: str) -> None:
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=10)
+    response = requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=10)
+    if not response.ok:
+        raise RuntimeError(f"Telegram API error {response.status_code}: {response.text}")
 
 
 def _format_event(event) -> str:
