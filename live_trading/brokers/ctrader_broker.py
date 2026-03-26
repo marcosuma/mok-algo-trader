@@ -72,7 +72,7 @@ def twisted_to_asyncio(deferred: Deferred, loop: asyncio.AbstractEventLoop):
 class CTraderBroker(BaseBroker):
     """cTrader Broker Adapter using Open API"""
 
-    def __init__(self):
+    def __init__(self, event_bus=None):
         if not CTRADER_AVAILABLE:
             logger.warning(
                 "ctrader-open-api module not found. Please install it: pip install ctrader-open-api"
@@ -119,6 +119,10 @@ class CTraderBroker(BaseBroker):
         self._reconnect_delay = 5  # seconds
         self._last_message_time: Optional[datetime] = None
         self._connection_monitor_task: Optional[asyncio.Task] = None
+
+        # Connection event bus (optional; creates a default bus if not provided)
+        from live_trading.notifications.connection_event_bus import ConnectionEventBus as _EventBus
+        self._event_bus = event_bus if event_bus is not None else _EventBus()
 
         # Register this instance for cleanup at exit
         _broker_instances.append(weakref.ref(self))
@@ -500,6 +504,8 @@ class CTraderBroker(BaseBroker):
             except Exception:
                 pass
         self._auth_error = str(failure)
+        from live_trading.notifications.connection_events import AuthFailed
+        self._event_bus.emit(AuthFailed(reason=str(failure)))
 
     def _handle_token_expired(self):
         """Attempt to refresh the token and re-authenticate.  Runs on reactor thread."""
@@ -521,10 +527,14 @@ class CTraderBroker(BaseBroker):
                 "[TOKEN] Refresh failed — manual token regeneration required: "
                 "python -m live_trading.scripts.get_ctrader_token"
             )
+            from live_trading.notifications.connection_events import TokenRefreshFailed
+            self._event_bus.emit(TokenRefreshFailed(reason="Token refresh request failed — HTTP error or network issue"))
 
     def _on_disconnected(self, client: Client, reason):
         """Callback when client disconnects - runs on reactor thread"""
         logger.error(f"[CONNECTION] ❌ DISCONNECTED from cTrader: {reason}")
+        from live_trading.notifications.connection_events import ConnectionDropped
+        self._event_bus.emit(ConnectionDropped(reason=str(reason)))
         logger.error(f"[CONNECTION] ❌ Market data streaming has stopped!")
         self._connection_error = f"Disconnected: {reason}"
         was_connected = self.connected
@@ -1140,6 +1150,9 @@ class CTraderBroker(BaseBroker):
             logger.info("✓ Successfully connected and authenticated with cTrader")
             logger.info(f"  Account ID: {self.account_id}")
             logger.info("=" * 60)
+            from live_trading.notifications.connection_events import SystemStarted
+            from live_trading.config import config as _config
+            self._event_bus.emit(SystemStarted(environment=_config.CTRADER_ENVIRONMENT))
             return True
 
         except Exception as e:
@@ -1152,6 +1165,8 @@ class CTraderBroker(BaseBroker):
 
         # Mark shutdown to prevent reconnection attempts
         self._shutdown_requested = True
+        from live_trading.notifications.connection_events import SystemStopped
+        self._event_bus.emit(SystemStopped(reason="Graceful shutdown"))
 
         # Stop connection monitor
         if self._connection_monitor_task:
@@ -1197,11 +1212,19 @@ class CTraderBroker(BaseBroker):
         if self._reconnect_attempts > self._max_reconnect_attempts:
             logger.error(f"[CONNECTION] ❌ Max reconnect attempts ({self._max_reconnect_attempts}) reached!")
             logger.error(f"[CONNECTION] ❌ CRITICAL: Trading system is OFFLINE - manual intervention required!")
+            from live_trading.notifications.connection_events import ReconnectExhausted
+            self._event_bus.emit(ReconnectExhausted(attempts=self._max_reconnect_attempts))
             self._reconnecting = False
             return
 
         delay = self._reconnect_delay * self._reconnect_attempts
         logger.warning(f"[CONNECTION] 🔄 Reconnection attempt {self._reconnect_attempts}/{self._max_reconnect_attempts} in {delay}s...")
+        from live_trading.notifications.connection_events import ReconnectAttempt
+        self._event_bus.emit(ReconnectAttempt(
+            attempt=self._reconnect_attempts,
+            max_attempts=self._max_reconnect_attempts,
+            delay_seconds=int(delay),
+        ))
 
         # Wait before reconnecting (exponential backoff)
         await asyncio.sleep(delay)
@@ -1236,6 +1259,8 @@ class CTraderBroker(BaseBroker):
 
             if success:
                 logger.info(f"[CONNECTION] ✅ RECONNECTED SUCCESSFULLY!")
+                from live_trading.notifications.connection_events import ConnectionRestored
+                self._event_bus.emit(ConnectionRestored(was_down_for_seconds=float(delay * self._reconnect_attempts)))
                 self._reconnect_attempts = 0
 
                 # Restore all subscriptions and callbacks
@@ -1355,6 +1380,8 @@ class CTraderBroker(BaseBroker):
                                 asyncio.create_task(self._attempt_reconnect())
                         elif seconds_since_message > STALE_THRESHOLD:
                             logger.warning(f"[CONNECTION] ⚠️ Connection may be stale ({seconds_since_message:.0f}s since last message)")
+                            from live_trading.notifications.connection_events import ConnectionStale
+                            self._event_bus.emit(ConnectionStale(seconds_since_last_message=seconds_since_message))
                     else:
                         logger.warning("[CONNECTION] ⚠️ No messages received yet after connection")
 
