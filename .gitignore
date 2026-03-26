@@ -159,3 +159,6 @@ live_trading.pid
 
 # cTrader token file (contains secrets)
 .ctrader_tokens.json
+
+# Superpowers specs/plans (local AI-generated docs, not for version control)
+docs/superpowers/
