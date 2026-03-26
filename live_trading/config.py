@@ -58,6 +58,10 @@ class Config:
     CTRADER_ACCESS_TOKEN: Optional[str] = os.getenv("CTRADER_ACCESS_TOKEN")
     CTRADER_ENVIRONMENT: str = os.getenv("CTRADER_ENVIRONMENT", "DEMO")  # DEMO or LIVE
 
+    # Telegram Notifications
+    TELEGRAM_BOT_TOKEN: Optional[str] = os.getenv("TELEGRAM_BOT_TOKEN")
+    TELEGRAM_CHAT_ID: Optional[str] = os.getenv("TELEGRAM_CHAT_ID")
+
     # API Server
     API_HOST: str = os.getenv("API_HOST", "0.0.0.0")
     API_PORT: int = int(os.getenv("API_PORT", "8000"))
