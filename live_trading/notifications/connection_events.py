@@ -1,10 +1,10 @@
 """Typed events emitted by the cTrader connection layer."""
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 def _now() -> datetime:
-    return datetime.utcnow()
+    return datetime.now(timezone.utc)
 
 
 @dataclass
