@@ -33,20 +33,23 @@ class ConnectionManager:
         self._broker = None
         self._shutdown = False
         self._restart_count = 0
+        self._restart_in_progress = False
         self._restart_task: Optional[asyncio.Task] = None
 
         self._bus.subscribe(self._on_event)
 
     def _on_event(self, event) -> None:
-        if isinstance(event, ReconnectExhausted) and not self._shutdown:
+        if isinstance(event, ReconnectExhausted) and not self._shutdown and not self._restart_in_progress:
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
+                    self._restart_in_progress = True
                     loop.call_soon_threadsafe(
                         lambda: asyncio.create_task(self._full_restart())
                     )
             except Exception:
                 logger.exception("[ConnectionManager] Failed to schedule full restart")
+                self._restart_in_progress = False
 
     async def connect(self) -> bool:
         self._broker = self._broker_factory(self._bus)
@@ -61,48 +64,51 @@ class ConnectionManager:
             await self._broker.disconnect()
 
     async def _full_restart(self) -> None:
-        if self._shutdown:
-            return
-
-        self._restart_count += 1
-        self._bus.emit(FullRestartAttempt(restart_count=self._restart_count))
-
-        logger.critical(
-            f"[ConnectionManager] All fast reconnects failed. "
-            f"Tearing down and restarting full connection in {self._restart_delay}s "
-            f"(restart #{self._restart_count})..."
-        )
-
-        # Tear down current broker
-        if self._broker:
-            try:
-                await self._broker.disconnect()
-            except Exception:
-                logger.exception("[ConnectionManager] Error during broker teardown before restart")
-            self._broker = None
-
-        if self._shutdown:
-            return
-
-        await asyncio.sleep(self._restart_delay)
-
-        if self._shutdown:
-            return
-
-        logger.info(f"[ConnectionManager] Starting fresh connection (restart #{self._restart_count})...")
         try:
-            self._broker = self._broker_factory(self._bus)
-            success = await self._broker.connect()
-            if success:
-                await self._broker.start_connection_monitor()
-                logger.info(f"[ConnectionManager] Full restart #{self._restart_count} succeeded.")
-            else:
-                logger.error(
-                    f"[ConnectionManager] Full restart #{self._restart_count} connect() returned False. "
+            if self._shutdown:
+                return
+
+            self._restart_count += 1
+            self._bus.emit(FullRestartAttempt(restart_count=self._restart_count))
+
+            logger.critical(
+                f"[ConnectionManager] All fast reconnects failed. "
+                f"Tearing down and restarting full connection in {self._restart_delay}s "
+                f"(restart #{self._restart_count})..."
+            )
+
+            # Tear down current broker
+            if self._broker:
+                try:
+                    await self._broker.disconnect()
+                except Exception:
+                    logger.exception("[ConnectionManager] Error during broker teardown before restart")
+                self._broker = None
+
+            if self._shutdown:
+                return
+
+            await asyncio.sleep(self._restart_delay)
+
+            if self._shutdown:
+                return
+
+            logger.info(f"[ConnectionManager] Starting fresh connection (restart #{self._restart_count})...")
+            try:
+                self._broker = self._broker_factory(self._bus)
+                success = await self._broker.connect()
+                if success:
+                    await self._broker.start_connection_monitor()
+                    logger.info(f"[ConnectionManager] Full restart #{self._restart_count} succeeded.")
+                else:
+                    logger.error(
+                        f"[ConnectionManager] Full restart #{self._restart_count} connect() returned False. "
+                        f"Will retry on next ReconnectExhausted event."
+                    )
+            except Exception:
+                logger.exception(
+                    f"[ConnectionManager] Exception during full restart #{self._restart_count}. "
                     f"Will retry on next ReconnectExhausted event."
                 )
-        except Exception:
-            logger.exception(
-                f"[ConnectionManager] Exception during full restart #{self._restart_count}. "
-                f"Will retry on next ReconnectExhausted event."
-            )
+        finally:
+            self._restart_in_progress = False
