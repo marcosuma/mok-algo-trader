@@ -162,3 +162,6 @@ live_trading.pid
 
 # Superpowers specs/plans (local AI-generated docs, not for version control)
 docs/superpowers/
+
+# Git worktrees
+.worktrees/
