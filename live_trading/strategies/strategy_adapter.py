@@ -198,15 +198,14 @@ class StrategyAdapter:
                 # Get most recent bar
                 latest_bar = other_df.iloc[-1]
 
-                # Add columns with bar_size prefix
-                for col in ["open", "high", "low", "close", "volume"]:
-                    if col in latest_bar:
+                # Add all columns from the other timeframe with bar_size prefix.
+                # _buffer_to_dataframe expands the 'indicators' dict into flat columns
+                # and drops the 'indicators' column, so we inject every non-metadata
+                # column directly rather than relying on the indicators dict.
+                skip_cols = {"timestamp"}
+                for col in other_df.columns:
+                    if col not in skip_cols and col in latest_bar.index:
                         primary_df[f"{bar_size}_{col}"] = latest_bar[col]
-
-                # Add indicators with bar_size prefix
-                if "indicators" in latest_bar and isinstance(latest_bar["indicators"], dict):
-                    for indicator_name, indicator_value in latest_bar["indicators"].items():
-                        primary_df[f"{bar_size}_{indicator_name}"] = indicator_value
 
         return primary_df
 
