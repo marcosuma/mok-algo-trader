@@ -60,9 +60,11 @@ class SupportResistanceBreakout(BaseForexStrategy):
 class ATRBreakout(BaseForexStrategy):
     """
     ATR-based breakout strategy:
-    - Uses ATR to determine breakout threshold
-    - Buy when price breaks above recent high + ATR
-    - Sell when price breaks below recent low - ATR
+    - Buy when price breaks above recent high + ATR * multiplier
+    - Sell when price breaks below recent low - ATR * multiplier
+    - Optional trend_filter: only take trades in the direction of the daily trend
+      (requires 1 day_close and 1 day_SMA_200 columns, injected by StrategyAdapter
+      when '1 day' is included in the operation's bar_sizes)
     """
 
     def __init__(
@@ -71,10 +73,12 @@ class ATRBreakout(BaseForexStrategy):
         commission=0.0002,
         lookback_period=20,
         atr_multiplier=1.5,
+        trend_filter=False,
     ):
         super().__init__(initial_cash, commission)
         self.lookback_period = lookback_period
         self.atr_multiplier = atr_multiplier
+        self.trend_filter = trend_filter
 
     def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         """Generate ATR-based breakout signals."""
@@ -83,24 +87,28 @@ class ATRBreakout(BaseForexStrategy):
         if "atr" not in df.columns:
             raise ValueError("atr indicator required")
 
-        # Recent highs and lows
         df["recent_high"] = df["high"].rolling(window=self.lookback_period).max()
         df["recent_low"] = df["low"].rolling(window=self.lookback_period).min()
-
-        # Breakout levels
-        df["breakout_level_up"] = df["recent_high"] + (
-            df["atr"] * self.atr_multiplier
-        )
-        df["breakout_level_down"] = df["recent_low"] - (
-            df["atr"] * self.atr_multiplier
-        )
-
-        # Breakout signals
+        df["breakout_level_up"] = df["recent_high"] + (df["atr"] * self.atr_multiplier)
+        df["breakout_level_down"] = df["recent_low"] - (df["atr"] * self.atr_multiplier)
         df["breakout_up"] = df["close"] > df["breakout_level_up"].shift(1)
         df["breakout_down"] = df["close"] < df["breakout_level_down"].shift(1)
 
-        df["execute_buy"] = np.where(df["breakout_up"], df["close"], np.nan)
-        df["execute_sell"] = np.where(df["breakout_down"], df["close"], np.nan)
+        buy_condition = df["breakout_up"]
+        sell_condition = df["breakout_down"]
+
+        if (
+            self.trend_filter
+            and "1 day_close" in df.columns
+            and "1 day_SMA_200" in df.columns
+        ):
+            bullish = df["1 day_close"] >= df["1 day_SMA_200"]
+            bearish = df["1 day_close"] < df["1 day_SMA_200"]
+            buy_condition = df["breakout_up"] & bullish
+            sell_condition = df["breakout_down"] & bearish
+
+        df["execute_buy"] = np.where(buy_condition, df["close"], np.nan)
+        df["execute_sell"] = np.where(sell_condition, df["close"], np.nan)
 
         return df
 
