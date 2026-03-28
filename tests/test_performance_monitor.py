@@ -66,3 +66,66 @@ class TestDetectDrift:
         live = {"lookback_period": 10, "trend_filter": False}
         optimal = {"lookback_period": 10}
         assert detect_drift(live, optimal) == []
+
+
+class TestParseBestConfigs:
+
+    def test_parses_single_row(self):
+        markdown = """
+| Rank | Strategy | Params | Mean Sharpe | Beat B&H % | Windows |
+|------|----------|--------|-------------|------------|---------|
+| 1 | ATRBreakout | lookback=10, mult=1.5 | 2.12 | 75% | 8 |
+"""
+        from scripts.scheduled_walkforward import parse_best_configs
+        results = parse_best_configs(markdown)
+        assert len(results) == 1
+        assert results[0]["strategy_name"] == "ATRBreakout"
+        assert results[0]["mean_sharpe"] == pytest.approx(2.12)
+        assert results[0]["beat_bh_pct"] == pytest.approx(0.75)
+
+    def test_parses_multiple_rows(self):
+        markdown = """
+| 1 | ATRBreakout | lookback=10, mult=1.5 | 2.12 | 75% | 8 |
+| 2 | ATRBreakout | lookback=20, mult=1.0 | 1.84 | 60% | 7 |
+"""
+        from scripts.scheduled_walkforward import parse_best_configs
+        results = parse_best_configs(markdown)
+        assert len(results) == 2
+
+    def test_returns_empty_for_no_table(self):
+        from scripts.scheduled_walkforward import parse_best_configs
+        assert parse_best_configs("No table here") == []
+
+
+class TestParseParamsString:
+
+    def test_parses_int_and_float(self):
+        from scripts.scheduled_walkforward import parse_params_string
+        result = parse_params_string("lookback=10, mult=1.5")
+        assert result["lookback"] == 10
+        assert isinstance(result["lookback"], int)
+        assert result["mult"] == pytest.approx(1.5)
+        assert isinstance(result["mult"], float)
+
+    def test_handles_empty_string(self):
+        from scripts.scheduled_walkforward import parse_params_string
+        assert parse_params_string("") == {}
+
+    def test_handles_single_param(self):
+        from scripts.scheduled_walkforward import parse_params_string
+        result = parse_params_string("lookback=20")
+        assert result == {"lookback": 20}
+
+
+class TestEstimateSharpeStd:
+
+    def test_extracts_std_value_from_markdown(self):
+        from scripts.scheduled_walkforward import _estimate_sharpe_std
+        markdown = "### ATRBreakout Results\nMean Sharpe: 2.1, std: 0.45\nOther data"
+        result = _estimate_sharpe_std(markdown, "ATRBreakout")
+        assert result == pytest.approx(0.45)
+
+    def test_returns_fallback_when_not_found(self):
+        from scripts.scheduled_walkforward import _estimate_sharpe_std
+        result = _estimate_sharpe_std("No std here", "ATRBreakout")
+        assert result == pytest.approx(0.5)
