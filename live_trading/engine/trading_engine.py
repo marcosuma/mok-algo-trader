@@ -16,6 +16,7 @@ from live_trading.models import (
     Order,
     MarketData,
     JournalEntry,
+    WalkForwardResult,
 )
 from live_trading.brokers.base_broker import BaseBroker
 from live_trading.brokers.middleware.adapter import BrokerAdapter
@@ -119,6 +120,7 @@ class TradingEngine:
                 Order,
                 MarketData,
                 JournalEntry,
+                WalkForwardResult,
             ],
         )
 

@@ -6,6 +6,7 @@ from .position import Position
 from .order import Order
 from .market_data import MarketData
 from .journal import JournalEntry
+from .walk_forward_result import WalkForwardResult
 
 __all__ = [
     "TradingOperation",
@@ -13,4 +14,5 @@ __all__ = [
     "Order",
     "MarketData",
     "JournalEntry",
+    "WalkForwardResult",
 ]
