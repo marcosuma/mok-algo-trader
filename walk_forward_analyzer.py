@@ -106,6 +106,24 @@ def load_data(data_path: str, bar_size: str = "1 hour") -> pd.DataFrame:
         if "shifted_open" not in df.columns:
             df["shifted_open"] = df["open"].shift(-1)
 
+    # Merge daily close + SMA_200 for trend_filter backtesting.
+    # Only when loading from a directory and the primary bar_size is not already daily.
+    if path.is_dir() and bar_size != "1 day":
+        daily_suffix = "-1 day.csv"
+        daily_files = [f for f in path.glob("*.csv") if f.name.endswith(daily_suffix)]
+        if daily_files:
+            try:
+                daily_raw = pd.read_csv(daily_files[0], index_col=[0])
+                daily_raw.index = pd.to_datetime(daily_raw.index, errors="coerce")
+                daily_raw = daily_raw[daily_raw.index.notna()].sort_index()
+                if "SMA_200" not in daily_raw.columns:
+                    daily_raw["SMA_200"] = daily_raw["close"].rolling(200, min_periods=1).mean()
+                df["1 day_close"] = daily_raw["close"].reindex(df.index, method="ffill")
+                df["1 day_SMA_200"] = daily_raw["SMA_200"].reindex(df.index, method="ffill")
+                print(f"Loaded daily data for trend filter: {daily_files[0].name}")
+            except Exception as exc:
+                print(f"Warning: could not load daily data for trend filter: {exc}")
+
     print(f"Loaded {len(df):,} bars  [{df.index[0].date()} → {df.index[-1].date()}]")
     return df
 
@@ -124,6 +142,14 @@ def build_configs(data_dir: str = "data", contract_name: str = "") -> list[tuple
             "ATRBreakout",
             ATRBreakout,
             {"lookback_period": lookback, "atr_multiplier": mult},
+        ))
+
+    # ATRBreakout with daily trend filter: 3 × 3 = 9 additional configs
+    for lookback, mult in itertools.product([10, 20, 30], [1.0, 1.5, 2.0]):
+        configs.append((
+            "ATRBreakout+TrendFilter",
+            ATRBreakout,
+            {"lookback_period": lookback, "atr_multiplier": mult, "trend_filter": True},
         ))
 
     # MomentumStrategy: 2 × 2 × 2 = 8 configs
