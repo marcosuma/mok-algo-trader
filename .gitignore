@@ -165,3 +165,4 @@ docs/superpowers/
 
 # Git worktrees
 .worktrees/
+.superpowers/
