@@ -1,5 +1,5 @@
 import React from 'react'
-import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom'
+import { Routes, Route, NavLink } from 'react-router-dom'
 import Dashboard from './pages/Dashboard'
 import Operations from './pages/Operations'
 import OperationDetail from './pages/OperationDetail'
@@ -9,37 +9,42 @@ import './App.css'
 
 function App() {
   return (
-    <Router>
-      <div className="app">
-        <nav className="navbar">
-          <div className="container">
-            <div className="nav-content">
-              <Link to="/" className="nav-logo">
-                Live Trading System
-              </Link>
-              <div className="nav-links">
-                <Link to="/">Dashboard</Link>
-                <Link to="/operations">Operations</Link>
-                <Link to="/operations/create">Create Operation</Link>
-                <Link to="/logs">Logs</Link>
-              </div>
-            </div>
-          </div>
-        </nav>
+    <div className="app-layout">
+      <nav className="sidebar">
+        <div className="sidebar-logo">
+          <span className="sidebar-logo-mok">MOK</span>
+          <span className="sidebar-logo-sub">Algo Trader</span>
+        </div>
 
-        <main className="main-content">
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/operations" element={<Operations />} />
-            <Route path="/operations/create" element={<CreateOperation />} />
-            <Route path="/operations/:id" element={<OperationDetail />} />
-            <Route path="/logs" element={<Logs />} />
-          </Routes>
-        </main>
-      </div>
-    </Router>
+        <div className="sidebar-nav">
+          <NavLink to="/" end className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
+            Dashboard
+          </NavLink>
+          <NavLink to="/operations" className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
+            Operations
+          </NavLink>
+          <NavLink to="/logs" className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
+            Logs
+          </NavLink>
+        </div>
+
+        <div className="sidebar-footer">
+          <span className="status-dot"></span>
+          <span className="status-label">Connected</span>
+        </div>
+      </nav>
+
+      <main className="main-content">
+        <Routes>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/operations" element={<Operations />} />
+          <Route path="/operations/create" element={<CreateOperation />} />
+          <Route path="/operations/:id" element={<OperationDetail />} />
+          <Route path="/logs" element={<Logs />} />
+        </Routes>
+      </main>
+    </div>
   )
 }
 
 export default App
-

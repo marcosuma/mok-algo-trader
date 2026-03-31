@@ -1,180 +1,230 @@
-* {
+/* ── CSS Custom Properties ── */
+:root {
+  --bg-base: #0f1729;
+  --bg-surface: #1a2744;
+  --bg-elevated: #243358;
+  --bg-sidebar: #0a1020;
+  --border: #1e3050;
+  --accent: #00d4a0;
+  --accent-blue: #4a7fb5;
+  --text-primary: #e2e8f0;
+  --text-secondary: #8ba3c0;
+  --success: #00d4a0;
+  --danger: #f85149;
+  --warning: #d29922;
+}
+
+/* ── Reset ── */
+*, *::before, *::after {
+  box-sizing: border-box;
   margin: 0;
   padding: 0;
-  box-sizing: border-box;
 }
 
+/* ── Base ── */
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: #f5f5f5;
+  background-color: var(--bg-base);
+  color: var(--text-primary);
 }
 
-code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
-    monospace;
-}
-
+/* ── Container ── */
 .container {
   max-width: 1400px;
   margin: 0 auto;
-  padding: 20px;
 }
 
+/* ── Card ── */
 .card {
-  background: white;
-  border-radius: 8px;
-  padding: 20px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 24px;
   margin-bottom: 20px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
+/* ── Buttons ── */
 .btn {
-  padding: 10px 20px;
+  padding: 8px 16px;
   border: none;
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
-  font-size: 14px;
-  transition: background-color 0.2s;
+  font-size: 13px;
+  font-weight: 500;
+  transition: opacity 0.15s;
+  text-decoration: none;
+  display: inline-block;
+}
+
+.btn:hover {
+  opacity: 0.85;
 }
 
 .btn-primary {
-  background-color: #007bff;
-  color: white;
-}
-
-.btn-primary:hover {
-  background-color: #0056b3;
+  background-color: var(--accent);
+  color: #0f1729;
 }
 
 .btn-danger {
-  background-color: #dc3545;
+  background-color: var(--danger);
   color: white;
-}
-
-.btn-danger:hover {
-  background-color: #c82333;
 }
 
 .btn-secondary {
-  background-color: #6c757d;
-  color: white;
-}
-
-.btn-secondary:hover {
-  background-color: #5a6268;
+  background-color: var(--bg-elevated);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
 }
 
 .btn-success {
-  background-color: #28a745;
-  color: white;
+  background-color: var(--success);
+  color: #0f1729;
 }
 
-.btn-success:hover {
-  background-color: #218838;
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
+/* ── Tables ── */
 table {
   width: 100%;
   border-collapse: collapse;
 }
 
-table th,
-table td {
-  padding: 12px;
-  text-align: left;
-  border-bottom: 1px solid #ddd;
-}
-
 table th {
-  background-color: #f8f9fa;
+  padding: 10px 12px;
+  text-align: left;
+  font-size: 11px;
   font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border);
 }
 
+table td {
+  padding: 12px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+table tbody tr {
+  background: var(--bg-surface);
+  transition: background 0.1s;
+}
+
+table tbody tr:hover {
+  background: var(--bg-elevated);
+}
+
+/* ── Status badges ── */
 .status-badge {
   display: inline-block;
-  padding: 4px 12px;
-  border-radius: 12px;
-  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 11px;
   font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .status-active {
-  background-color: #d4edda;
-  color: #155724;
+  background-color: rgba(0, 212, 160, 0.15);
+  color: var(--success);
 }
 
 .status-paused {
-  background-color: #fff3cd;
-  color: #856404;
+  background-color: rgba(210, 153, 34, 0.15);
+  color: var(--warning);
 }
 
 .status-closed {
-  background-color: #f8d7da;
-  color: #721c24;
+  background-color: rgba(248, 81, 73, 0.15);
+  color: var(--danger);
 }
 
+/* ── P/L colours ── */
 .pnl-positive {
-  color: #28a745;
+  color: var(--success);
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .pnl-negative {
-  color: #dc3545;
+  color: var(--danger);
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
+/* ── Forms ── */
 .form-group {
   margin-bottom: 20px;
 }
 
 .form-group label {
   display: block;
-  margin-bottom: 5px;
-  font-weight: 600;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
 }
 
 .form-group input,
-.form-group select {
+.form-group select,
+.form-group textarea {
   width: 100%;
-  padding: 10px;
-  border: 1px solid #ddd;
-  border-radius: 4px;
+  padding: 10px 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
   font-size: 14px;
 }
 
 .form-group input:focus,
-.form-group select:focus {
+.form-group select:focus,
+.form-group textarea:focus {
   outline: none;
-  border-color: #007bff;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(0, 212, 160, 0.15);
 }
 
+.form-group input::placeholder {
+  color: var(--text-secondary);
+}
+
+/* ── Utility messages ── */
 .loading {
   text-align: center;
   padding: 40px;
-  color: #6c757d;
+  color: var(--text-secondary);
 }
 
 .error {
-  background-color: #f8d7da;
-  color: #721c24;
-  padding: 12px;
-  border-radius: 4px;
+  background-color: rgba(248, 81, 73, 0.1);
+  color: var(--danger);
+  border: 1px solid rgba(248, 81, 73, 0.3);
+  padding: 12px 16px;
+  border-radius: 6px;
   margin-bottom: 20px;
 }
 
 .success {
-  background-color: #d4edda;
-  color: #155724;
-  padding: 12px;
-  border-radius: 4px;
+  background-color: rgba(0, 212, 160, 0.1);
+  color: var(--success);
+  border: 1px solid rgba(0, 212, 160, 0.3);
+  padding: 12px 16px;
+  border-radius: 6px;
   margin-bottom: 20px;
 }
 
-/* Recharts brush fixes - ensure SVG elements receive mouse events */
+/* ── Recharts brush fixes ── */
 .recharts-wrapper,
 .recharts-surface {
   overflow: visible !important;
