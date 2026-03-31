@@ -195,7 +195,8 @@ table tbody tr:hover {
   box-shadow: 0 0 0 2px rgba(0, 212, 160, 0.15);
 }
 
-.form-group input::placeholder {
+.form-group input::placeholder,
+.form-group textarea::placeholder {
   color: var(--text-secondary);
 }
 

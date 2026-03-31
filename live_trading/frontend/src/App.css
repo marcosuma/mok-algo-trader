@@ -157,26 +157,3 @@
 .live-pulse {
   animation: pulse 1.5s infinite;
 }
-
-/* ── Recharts brush styles ── */
-.recharts-brush {
-  cursor: default;
-}
-
-.recharts-brush-traveller {
-  cursor: ew-resize !important;
-  pointer-events: all !important;
-}
-
-.recharts-brush-slide {
-  cursor: move !important;
-  pointer-events: all !important;
-}
-
-.recharts-brush rect.recharts-brush-slide {
-  fill-opacity: 0.3;
-}
-
-.recharts-brush-texts {
-  pointer-events: none;
-}
