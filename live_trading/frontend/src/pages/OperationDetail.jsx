@@ -230,7 +230,7 @@ function OperationDetail() {
     <div className="container">
       <div className="page-header">
         <div>
-          <Link to="/operations" style={{ color: '#6c757d', textDecoration: 'none' }}>
+          <Link to="/operations" style={{ color: 'var(--text-secondary)', textDecoration: 'none', fontSize: '13px' }}>
             ← Back to Operations
           </Link>
           <h1 className="page-title" style={{ marginTop: '10px' }}>
@@ -245,7 +245,7 @@ function OperationDetail() {
       </div>
 
       {stats && (
-        <div className="stats-grid">
+        <div className="stats-row" style={{ gridTemplateColumns: 'repeat(6, 1fr)' }}>
           <div className="stat-card">
             <div className="stat-label">Total P/L</div>
             <div className={`stat-value ${stats.total_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}`}>
@@ -277,88 +277,73 @@ function OperationDetail() {
       )}
 
       <div className="card">
-        <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', borderBottom: '1px solid #ddd', paddingBottom: '10px' }}>
-          <button
-            className={`btn ${activeTab === 'overview' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setActiveTab('overview')}
-          >
-            Overview
-          </button>
-          <button
-            className={`btn ${activeTab === 'positions' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setActiveTab('positions')}
-          >
-            Positions ({positions.length})
-          </button>
-          <button
-            className={`btn ${activeTab === 'trades' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setActiveTab('trades')}
-          >
-            Trades ({trades.length})
-          </button>
-          <button
-            className={`btn ${activeTab === 'orders' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setActiveTab('orders')}
-          >
-            Orders ({orders.length})
-          </button>
-          <button
-            className={`btn ${activeTab === 'market-data' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setActiveTab('market-data')}
-          >
-            Market Data ({marketDataCount})
-          </button>
+        {/* Pill tab bar */}
+        <div style={{ display: 'flex', gap: '4px', marginBottom: '24px', borderBottom: '1px solid var(--border)', paddingBottom: '0' }}>
+          {[
+            { key: 'overview', label: 'Overview' },
+            { key: 'positions', label: `Positions (${positions.length})` },
+            { key: 'trades', label: `Trades (${trades.length})` },
+            { key: 'orders', label: `Orders (${orders.length})` },
+            { key: 'market-data', label: `Market Data (${marketDataCount})` },
+          ].map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => setActiveTab(key)}
+              style={{
+                padding: '8px 16px',
+                background: 'none',
+                border: 'none',
+                borderBottom: activeTab === key ? '2px solid var(--accent)' : '2px solid transparent',
+                color: activeTab === key ? 'var(--text-primary)' : 'var(--text-secondary)',
+                cursor: 'pointer',
+                fontSize: '13px',
+                fontWeight: activeTab === key ? '600' : '400',
+                transition: 'color 0.15s',
+                marginBottom: '-1px',
+              }}
+            >
+              {label}
+            </button>
+          ))}
         </div>
 
         {activeTab === 'overview' && (
-          <div>
-            <h3>Operation Details</h3>
-            <table>
-              <tbody>
-                <tr>
-                  <td><strong>Asset</strong></td>
-                  <td>{operation.asset}</td>
-                </tr>
-                <tr>
-                  <td><strong>Strategy</strong></td>
-                  <td>{operation.strategy_name}</td>
-                </tr>
-                <tr>
-                  <td><strong>Bar Sizes</strong></td>
-                  <td>{operation.bar_sizes.join(', ')}</td>
-                </tr>
-                <tr>
-                  <td><strong>Primary Bar Size</strong></td>
-                  <td>{operation.primary_bar_size}</td>
-                </tr>
-                <tr>
-                  <td><strong>Status</strong></td>
-                  <td>
-                    <span className={`status-badge status-${operation.status}`}>
-                      {operation.status}
-                    </span>
-                  </td>
-                </tr>
-                <tr>
-                  <td><strong>Initial Capital</strong></td>
-                  <td>{formatCurrency(operation.initial_capital)}</td>
-                </tr>
-                <tr>
-                  <td><strong>Current Capital</strong></td>
-                  <td>{formatCurrency(operation.current_capital)}</td>
-                </tr>
-                <tr>
-                  <td><strong>Total P/L</strong></td>
-                  <td className={operation.total_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+            {[
+              { label: 'Asset', value: operation.asset },
+              { label: 'Strategy', value: operation.strategy_name },
+              { label: 'Bar Sizes', value: operation.bar_sizes.join(', ') },
+              { label: 'Primary Bar Size', value: operation.primary_bar_size },
+              { label: 'Status', value: <span className={`status-badge status-${operation.status}`}>{operation.status}</span> },
+              { label: 'Initial Capital', value: formatCurrency(operation.initial_capital) },
+              { label: 'Current Capital', value: formatCurrency(operation.current_capital) },
+              {
+                label: 'Total P/L',
+                value: (
+                  <span className={operation.total_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}>
                     {formatCurrency(operation.total_pnl)} ({formatPercent(operation.total_pnl_pct)})
-                  </td>
-                </tr>
-                <tr>
-                  <td><strong>Created</strong></td>
-                  <td>{formatDate(operation.created_at)}</td>
-                </tr>
-              </tbody>
-            </table>
+                  </span>
+                ),
+              },
+              { label: 'Created', value: formatDate(operation.created_at) },
+            ].map(({ label, value }) => (
+              <div
+                key={label}
+                style={{
+                  background: 'var(--bg-elevated)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  padding: '14px 16px',
+                }}
+              >
+                <div style={{ fontSize: '11px', fontWeight: '600', color: 'var(--accent-blue)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                  {label}
+                </div>
+                <div style={{ fontSize: '14px', color: 'var(--text-primary)', fontWeight: '500' }}>
+                  {value}
+                </div>
+              </div>
+            ))}
           </div>
         )}
 
@@ -558,8 +543,10 @@ function OperationDetail() {
                       onChange={(e) => setSelectedBarSize(e.target.value)}
                       style={{
                         padding: '8px 12px',
-                        border: '1px solid #ddd',
-                        borderRadius: '4px',
+                        background: 'var(--bg-elevated)',
+                        border: '1px solid var(--border)',
+                        borderRadius: '6px',
+                        color: 'var(--text-primary)',
                         fontSize: '14px',
                       }}
                     >
@@ -584,8 +571,10 @@ function OperationDetail() {
                       }}
                       style={{
                         padding: '8px 12px',
-                        border: '1px solid #ddd',
-                        borderRadius: '4px',
+                        background: 'var(--bg-elevated)',
+                        border: '1px solid var(--border)',
+                        borderRadius: '6px',
+                        color: 'var(--text-primary)',
                         fontSize: '14px',
                         minWidth: '200px',
                       }}
@@ -596,7 +585,7 @@ function OperationDetail() {
                         </option>
                       ))}
                     </select>
-                    <small style={{ color: '#6c757d' }}>(Hold Ctrl/Cmd to select multiple)</small>
+                    <small style={{ color: 'var(--text-secondary)' }}>(Hold Ctrl/Cmd to select multiple)</small>
                   </div>
                 )}
 
@@ -606,9 +595,9 @@ function OperationDetail() {
                   alignItems: 'center',
                   gap: '12px',
                   padding: '8px 16px',
-                  backgroundColor: liveRefresh ? '#e8f5e9' : '#f5f5f5',
+                  backgroundColor: liveRefresh ? 'rgba(0, 212, 160, 0.1)' : 'var(--bg-elevated)',
                   borderRadius: '8px',
-                  border: liveRefresh ? '1px solid #4caf50' : '1px solid #ddd',
+                  border: liveRefresh ? '1px solid rgba(0, 212, 160, 0.4)' : '1px solid var(--border)',
                   transition: 'all 0.3s ease'
                 }}>
                   {/* Manual Refresh Button */}
@@ -625,7 +614,7 @@ function OperationDetail() {
                       cursor: marketDataLoading ? 'not-allowed' : 'pointer',
                       fontWeight: '500',
                       fontSize: '13px',
-                      backgroundColor: '#2196F3',
+                      backgroundColor: 'var(--accent-blue)',
                       color: '#fff',
                       opacity: marketDataLoading ? 0.6 : 1,
                       transition: 'opacity 0.2s ease'
@@ -648,8 +637,9 @@ function OperationDetail() {
                       cursor: 'pointer',
                       fontWeight: '600',
                       fontSize: '13px',
-                      backgroundColor: liveRefresh ? '#4caf50' : '#6c757d',
-                      color: '#fff',
+                      backgroundColor: liveRefresh ? 'var(--accent)' : 'var(--bg-elevated)',
+                      color: liveRefresh ? '#0f1729' : 'var(--text-secondary)',
+                      border: liveRefresh ? 'none' : '1px solid var(--border)',
                       transition: 'background-color 0.2s ease'
                     }}
                     title={liveRefresh ? 'Click to pause auto-refresh' : 'Click to enable auto-refresh'}
@@ -665,13 +655,13 @@ function OperationDetail() {
                         alignItems: 'center',
                         gap: '6px',
                         fontSize: '12px',
-                        color: '#2e7d32'
+                        color: 'var(--accent)'
                       }}>
                         <span style={{
                           display: 'inline-block',
                           width: '8px',
                           height: '8px',
-                          backgroundColor: '#4caf50',
+                          backgroundColor: 'var(--accent)',
                           borderRadius: '50%',
                           animation: 'pulse 1.5s infinite'
                         }}></span>
@@ -679,12 +669,12 @@ function OperationDetail() {
                       </div>
                     )}
                     {!liveRefresh && parseBarSizeToMs(selectedBarSize) && (
-                      <span style={{ fontSize: '11px', color: '#666' }}>
+                      <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
                         Auto-refresh: every {selectedBarSize}
                       </span>
                     )}
                     {lastRefreshTime && (
-                      <span style={{ fontSize: '10px', color: '#999' }}>
+                      <span style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>
                         Last: {new Date(lastRefreshTime).toLocaleTimeString()}
                       </span>
                     )}
@@ -694,9 +684,9 @@ function OperationDetail() {
             </div>
 
             {marketDataLoading ? (
-              <div style={{ padding: '40px', textAlign: 'center', color: '#6c757d' }}>
+              <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-secondary)' }}>
                 <div style={{ marginBottom: '10px' }}>Loading market data...</div>
-                <div style={{ fontSize: '14px', color: '#999' }}>Aggregating and processing data...</div>
+                <div style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>Aggregating and processing data...</div>
               </div>
             ) : marketData.length === 0 ? (
               <p>No market data available</p>
@@ -708,7 +698,7 @@ function OperationDetail() {
                   justifyContent: 'space-between',
                   alignItems: 'center'
                 }}>
-                  <div style={{ color: '#6c757d' }}>
+                  <div style={{ color: 'var(--text-secondary)' }}>
                     Showing {marketData.filter((md) => !selectedBarSize || md.bar_size === selectedBarSize).length} bars
                     {selectedBarSize && ` for ${selectedBarSize}`}
                   </div>
