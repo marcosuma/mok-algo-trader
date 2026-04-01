@@ -24,7 +24,7 @@ function Operations() {
     operationsApi.list(undefined)
       .then((res) => setAllOperations(res.data))
       .catch(() => {})
-  }, [operations])
+  }, [])
 
   const loadOperations = async () => {
     try {
