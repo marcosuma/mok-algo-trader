@@ -95,6 +95,12 @@ function CreateOperation() {
 
       <div className="card">
         <form onSubmit={handleSubmit}>
+          <div style={{ marginBottom: '20px' }}>
+            <div style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              Asset & Strategy
+            </div>
+          </div>
+
           <div className="form-group">
             <label>Asset Symbol *</label>
             <input
@@ -111,7 +117,7 @@ function CreateOperation() {
             <label>Bar Sizes *</label>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
               {availableBarSizes.map((bs) => (
-                <label key={bs} style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <label key={bs} style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-primary)', fontSize: '13px', cursor: 'pointer' }}>
                   <input
                     type="checkbox"
                     name="bar_size"
@@ -161,7 +167,11 @@ function CreateOperation() {
             onChange={setStrategyConfig}
           />
 
-          <h3 style={{ marginTop: '30px', marginBottom: '20px' }}>Risk Management</h3>
+          <div style={{ borderTop: '1px solid var(--border)', marginTop: '28px', marginBottom: '20px', paddingTop: '16px' }}>
+            <div style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              Risk Management
+            </div>
+          </div>
 
           <div className="form-group">
             <label>Stop Loss Type</label>
@@ -206,7 +216,11 @@ function CreateOperation() {
             />
           </div>
 
-          <h3 style={{ marginTop: '30px', marginBottom: '20px' }}>Crash Recovery</h3>
+          <div style={{ borderTop: '1px solid var(--border)', marginTop: '28px', marginBottom: '20px', paddingTop: '16px' }}>
+            <div style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              Crash Recovery
+            </div>
+          </div>
 
           <div className="form-group">
             <label>Crash Recovery Mode</label>
@@ -242,14 +256,15 @@ function CreateOperation() {
             />
           </div>
 
-          <div style={{ marginTop: '30px', display: 'flex', gap: '10px' }}>
-            <button type="submit" className="btn btn-primary" disabled={loading}>
+          <div style={{ marginTop: '32px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <button type="submit" className="btn btn-primary" disabled={loading} style={{ width: '100%', padding: '12px', fontSize: '14px', fontWeight: '600' }}>
               {loading ? 'Creating...' : 'Create Operation'}
             </button>
             <button
               type="button"
               className="btn btn-secondary"
               onClick={() => navigate('/operations')}
+              style={{ width: '100%' }}
             >
               Cancel
             </button>
