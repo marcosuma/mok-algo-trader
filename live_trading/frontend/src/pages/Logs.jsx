@@ -4,19 +4,19 @@ import { API_BASE } from '../api/client'
 const LOG_LEVELS = ['ALL', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
 
 const LEVEL_COLORS = {
-  DEBUG: '#6b7280',
-  INFO: '#3b82f6',
-  WARNING: '#f59e0b',
-  ERROR: '#ef4444',
-  CRITICAL: '#dc2626'
+  DEBUG: '#4a7fb5',
+  INFO: '#8ba3c0',
+  WARNING: '#d29922',
+  ERROR: '#f85149',
+  CRITICAL: '#f85149',
 }
 
 const LEVEL_BG_COLORS = {
-  DEBUG: 'rgba(107, 114, 128, 0.1)',
-  INFO: 'rgba(59, 130, 246, 0.1)',
-  WARNING: 'rgba(245, 158, 11, 0.1)',
-  ERROR: 'rgba(239, 68, 68, 0.1)',
-  CRITICAL: 'rgba(220, 38, 38, 0.2)'
+  DEBUG: 'rgba(74, 127, 181, 0.08)',
+  INFO: 'rgba(139, 163, 192, 0.06)',
+  WARNING: 'rgba(210, 153, 34, 0.1)',
+  ERROR: 'rgba(248, 81, 73, 0.1)',
+  CRITICAL: 'rgba(248, 81, 73, 0.15)',
 }
 
 /**
@@ -882,14 +882,17 @@ export default function Logs() {
                   borderBottom: '1px solid #222',
                   backgroundColor: isSelected
                     ? 'rgba(59, 130, 246, 0.15)'
-                    : (LEVEL_BG_COLORS[log.level] || 'transparent'),
+                    : (LEVEL_BG_COLORS[log.level] || LEVEL_BG_COLORS.INFO),
                   display: 'grid',
                   gridTemplateColumns: '160px 80px 200px 1fr',
                   gap: '15px',
                   alignItems: 'start',
                   cursor: 'pointer',
-                  borderLeft: isSelected ? '3px solid #3b82f6' : '3px solid transparent',
-                  transition: 'background-color 0.1s'
+                  borderLeft: isSelected ? '3px solid #3b82f6' : `3px solid ${LEVEL_COLORS[log.level] || LEVEL_COLORS.INFO}`,
+                  borderRadius: '0 4px 4px 0',
+                  transition: 'background-color 0.1s',
+                  fontFamily: '"JetBrains Mono", "Fira Code", monospace',
+                  fontSize: '12px'
                 }}
               >
                 <span style={{ color: '#888' }}>
