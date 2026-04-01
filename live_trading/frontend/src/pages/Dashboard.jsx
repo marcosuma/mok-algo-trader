@@ -11,7 +11,7 @@ function Dashboard() {
 
   useEffect(() => {
     loadData()
-    const interval = setInterval(loadData, 5000) // Refresh every 5 seconds
+    const interval = setInterval(loadData, 5000)
     return () => clearInterval(interval)
   }, [])
 
@@ -45,15 +45,21 @@ function Dashboard() {
       <div className="page-header">
         <h1 className="page-title">Dashboard</h1>
         <Link to="/operations/create" className="btn btn-primary">
-          Create Operation
+          + New Operation
         </Link>
       </div>
 
       {overallStats && (
-        <div className="stats-grid">
+        <div className="stats-row">
           <div className="stat-card">
-            <div className="stat-label">Total Operations</div>
-            <div className="stat-value">{overallStats.total_operations}</div>
+            <div className="stat-label">Total Equity</div>
+            <div className="stat-value">{formatCurrency(overallStats.equity)}</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-label">Total P/L</div>
+            <div className={`stat-value ${overallStats.floating_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}`}>
+              {formatCurrency(overallStats.floating_pnl)}
+            </div>
           </div>
           <div className="stat-card">
             <div className="stat-label">Active Operations</div>
@@ -63,52 +69,38 @@ function Dashboard() {
             <div className="stat-label">Total Trades</div>
             <div className="stat-value">{overallStats.total_trades}</div>
           </div>
-          <div className="stat-card">
-            <div className="stat-label">Balance {overallStats.currency && `(${overallStats.currency})`}</div>
-            <div className="stat-value">{formatCurrency(overallStats.balance)}</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-label">Equity</div>
-            <div className="stat-value">{formatCurrency(overallStats.equity)}</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-label">Floating P/L</div>
-            <div className={`stat-value ${overallStats.floating_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}`}>
-              {formatCurrency(overallStats.floating_pnl)}
-            </div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-label">Margin Used</div>
-            <div className="stat-value">{formatCurrency(overallStats.margin_used)}</div>
-          </div>
         </div>
       )}
 
       <div className="card">
-        <h2>Recent Active Operations</h2>
+        <h2 style={{ color: 'var(--text-primary)', marginBottom: '20px', fontSize: '16px', fontWeight: '600' }}>
+          Active Operations
+        </h2>
         {recentOperations.length === 0 ? (
-          <p>No active operations</p>
+          <p style={{ color: 'var(--text-secondary)' }}>No active operations</p>
         ) : (
           <table>
             <thead>
               <tr>
                 <th>Asset</th>
                 <th>Strategy</th>
+                <th>Bar Sizes</th>
                 <th>Status</th>
                 <th>P/L</th>
                 <th>P/L %</th>
-                <th>Actions</th>
+                <th>Action</th>
               </tr>
             </thead>
             <tbody>
               {recentOperations.map((op) => (
                 <tr key={op.id}>
-                  <td>{op.asset}</td>
+                  <td style={{ fontWeight: '600' }}>{op.asset}</td>
                   <td>{op.strategy_name}</td>
+                  <td style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>
+                    {op.bar_sizes ? op.bar_sizes.join(', ') : '-'}
+                  </td>
                   <td>
-                    <span className={`status-badge status-${op.status}`}>
-                      {op.status}
-                    </span>
+                    <span className={`status-badge status-${op.status}`}>{op.status}</span>
                   </td>
                   <td className={op.total_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}>
                     {formatCurrency(op.total_pnl)}
@@ -117,8 +109,11 @@ function Dashboard() {
                     {formatPercent(op.total_pnl_pct)}
                   </td>
                   <td>
-                    <Link to={`/operations/${op.id}`} className="btn btn-secondary">
-                      View
+                    <Link
+                      to={`/operations/${op.id}`}
+                      style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: '13px', fontWeight: '500' }}
+                    >
+                      View →
                     </Link>
                   </td>
                 </tr>
