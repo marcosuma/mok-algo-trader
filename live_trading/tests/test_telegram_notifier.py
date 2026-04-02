@@ -33,16 +33,33 @@ class TestTelegramNotifier:
         assert len(sent) == 1
         assert "Connection refused" in sent[0]
 
-    def test_multiple_events_batched_into_one_message(self):
+    def test_retry_attempts_batched_together(self):
+        """Non-immediate events (ReconnectAttempt) still batch within the window."""
         notifier, sent = self._make_notifier()
-        notifier.on_event(ConnectionDropped(reason="refused"))
         notifier.on_event(ReconnectAttempt(attempt=1, max_attempts=5, delay_seconds=5))
         notifier.on_event(ReconnectAttempt(attempt=2, max_attempts=5, delay_seconds=10))
         time.sleep(0.2)
         assert len(sent) == 1
-        assert "refused" in sent[0]
         assert "1/5" in sent[0]
         assert "2/5" in sent[0]
+
+    def test_immediate_event_flushes_without_waiting_for_batch_window(self):
+        """ConnectionDropped and other critical events are sent immediately, ignoring the batch window."""
+        notifier, sent = self._make_notifier(batch_window=60.0)  # very long window
+        notifier.on_event(ConnectionDropped(reason="refused"))
+        time.sleep(0.2)
+        assert len(sent) == 1
+        assert "refused" in sent[0]
+
+    def test_immediate_event_flushes_buffered_retries_with_it(self):
+        """When a critical event arrives, any buffered non-immediate events flush along with it."""
+        notifier, sent = self._make_notifier(batch_window=60.0)
+        notifier.on_event(ReconnectAttempt(attempt=1, max_attempts=5, delay_seconds=5))
+        notifier.on_event(ReconnectExhausted(attempts=5))  # immediate — flushes everything
+        time.sleep(0.2)
+        assert len(sent) == 1
+        assert "1/5" in sent[0]
+        assert "5" in sent[0]
 
     def test_events_after_flush_start_new_batch(self):
         notifier, sent = self._make_notifier(batch_window=0.05)

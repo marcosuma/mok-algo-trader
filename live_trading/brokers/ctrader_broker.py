@@ -1241,6 +1241,11 @@ class CTraderBroker(BaseBroker):
             self._stop_reactor()
             await asyncio.sleep(1)  # Give it time to clean up
 
+            # Reset shutdown flag so _on_disconnected can schedule reconnection again
+            # after this reconnect attempt completes. Without this, any subsequent
+            # disconnect is silently ignored because _stop_reactor() sets the flag to True.
+            self._shutdown_requested = False
+
             # Reset state
             self.connected = False
             self.authenticated = False

@@ -24,6 +24,11 @@ _DEGRADED_TYPES = (
 _RECOVERY_TYPES = (ConnectionRestored, SystemStarted)
 # Events that indicate a warning (🟡)
 _WARNING_TYPES = (ConnectionStale,)
+# Events that must be sent immediately without waiting for the batch window
+_IMMEDIATE_TYPES = (
+    ConnectionDropped, ReconnectExhausted, FullRestartAttempt,
+    ConnectionRestored, AuthFailed, TokenRefreshFailed, SystemStopped,
+)
 
 
 def _default_send(bot_token: str, chat_id: str, text: str) -> None:
@@ -39,17 +44,22 @@ def _format_event(event) -> str:
     if isinstance(event, SystemStopped):
         return f"System stopped: {event.reason}"
     if isinstance(event, ConnectionDropped):
-        return f"Connection dropped: {event.reason}"
+        return f"Connection dropped — auto-reconnect starting\n  Reason: {event.reason}"
     if isinstance(event, ConnectionStale):
         return f"Connection stale ({event.seconds_since_last_message:.0f}s since last message)"
     if isinstance(event, ConnectionRestored):
-        return f"Connection restored (was down {event.was_down_for_seconds:.0f}s)"
+        secs = event.was_down_for_seconds
+        duration = f"{secs / 60:.1f}m" if secs >= 60 else f"{secs:.0f}s"
+        return f"Connection restored — was down {duration}"
     if isinstance(event, ReconnectAttempt):
-        return f"Reconnect attempt {event.attempt}/{event.max_attempts} (delay: {event.delay_seconds}s)"
+        return (
+            f"Reconnect attempt {event.attempt}/{event.max_attempts} "
+            f"(waited {event.delay_seconds}s before this attempt)"
+        )
     if isinstance(event, ReconnectExhausted):
-        return f"All {event.attempts} reconnect attempts failed — starting full restart"
+        return f"All {event.attempts} reconnect attempts failed — full restart in 5 min"
     if isinstance(event, FullRestartAttempt):
-        return f"Full restart #{event.restart_count} — tearing down and reconnecting from scratch"
+        return f"Full restart #{event.restart_count} — tearing down broker and reconnecting from scratch"
     if isinstance(event, AuthFailed):
         return f"Authentication failed: {event.reason}"
     if isinstance(event, TokenRefreshFailed):
@@ -99,12 +109,20 @@ class TelegramNotifier:
     def on_event(self, event) -> None:
         if not self._enabled:
             return
+        flush_now = isinstance(event, _IMMEDIATE_TYPES)
         with self._buffer_lock:
             self._buffer.append(event)
-            if self._timer is None:
+            if flush_now:
+                # Cancel any pending batch timer and flush everything immediately
+                if self._timer is not None:
+                    self._timer.cancel()
+                    self._timer = None
+            elif self._timer is None:
                 self._timer = threading.Timer(self._batch_window, self._flush)
                 self._timer.daemon = True
                 self._timer.start()
+        if flush_now:
+            threading.Thread(target=self._flush, daemon=True).start()
 
     def _flush(self) -> None:
         with self._buffer_lock:
