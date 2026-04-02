@@ -507,16 +507,15 @@ function MarketDataChart({ data, selectedIndicators = [] }) {
     domain: xAxisIndexDomain,
     tickFormatter: xAxisTickFormatter,
     tick: { fill: '#8ba3c0', fontSize: 11 },
-    axisLine: { stroke: chartType === 'candlestick' ? '#444' : '#ccc' },
-    tickLine: { stroke: chartType === 'candlestick' ? '#444' : '#ccc' },
+    axisLine: { stroke: '#1e3050' },
+    tickLine: { stroke: '#1e3050' },
     stroke: '#8ba3c0',
     hide: true, // Hide X axis on all but last chart
   }
 
-  const isDarkTheme = chartType === 'candlestick'
-  const bgColor = isDarkTheme ? '#1a1a2e' : '#fafafa'
-  const gridColor = isDarkTheme ? '#2a2a3e' : '#e0e0e0'
-  const textColor = isDarkTheme ? '#888' : '#666'
+  const bgColor = '#1a2744'
+  const gridColor = '#1e3050'
+  const textColor = '#8ba3c0'
 
   // Custom tooltip for all charts with OHLC data and price change
   const CustomTooltip = ({ active, payload, label }) => {
@@ -989,7 +988,7 @@ function MarketDataChart({ data, selectedIndicators = [] }) {
         style={{
           backgroundColor: '#1a2744',
           borderRadius: '8px',
-          border: isDarkTheme ? '1px solid #2a2a3e' : '1px solid #e0e0e0',
+          border: '1px solid #1e3050',
           overflow: 'visible',
         }}
         onDoubleClick={handleDoubleClick}
@@ -1261,7 +1260,7 @@ function MarketDataChart({ data, selectedIndicators = [] }) {
             height: 60,
             padding: '10px 50px',
             borderTop: `1px solid ${gridColor}`,
-            backgroundColor: isDarkTheme ? '#16162a' : '#f0f0f0',
+            backgroundColor: '#162040',
           }}
           onDoubleClick={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}
@@ -1274,8 +1273,8 @@ function MarketDataChart({ data, selectedIndicators = [] }) {
               <Brush
                 dataKey="index"
                 height={40}
-                stroke={isDarkTheme ? '#6366f1' : '#8884d8'}
-                fill={isDarkTheme ? '#1e1e38' : '#fff'}
+                stroke='#6366f1'
+                fill='#1e3050'
                 startIndex={brushIndices.startIndex}
                 endIndex={brushIndices.endIndex}
                 onChange={handleBrushChange}
