@@ -1,5 +1,5 @@
 {
-    "name": "live-trading-frontend",
+    "name": "mok-algo-trader",
     "version": "0.1.0",
     "type": "module",
     "scripts": {
