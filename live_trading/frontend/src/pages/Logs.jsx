@@ -878,8 +878,8 @@ export default function Logs() {
                 key={`${log.timestamp}-${index}`}
                 onClick={() => setSelectedLogIndex(isSelected ? null : index)}
                 style={{
-                  padding: '8px 15px',
-                  borderBottom: '1px solid #222',
+                  padding: '8px 12px 8px 16px',
+                  borderBottom: '1px solid var(--border)',
                   backgroundColor: isSelected
                     ? 'rgba(59, 130, 246, 0.15)'
                     : (LEVEL_BG_COLORS[log.level] || LEVEL_BG_COLORS.INFO),
