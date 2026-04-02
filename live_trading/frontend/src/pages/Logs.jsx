@@ -301,12 +301,12 @@ export default function Logs() {
   return (
     <div style={{
       padding: '20px',
-      backgroundColor: '#0f0f23',
+      backgroundColor: 'var(--bg-surface)',
       minHeight: '100vh',
-      color: '#e0e0e0'
+      color: 'var(--text-primary)'
     }}>
       <h1 style={{
-        color: '#fff',
+        color: 'var(--text-primary)',
         marginBottom: '20px',
         display: 'flex',
         alignItems: 'center',
@@ -317,7 +317,7 @@ export default function Logs() {
           <span style={{
             fontSize: '12px',
             backgroundColor: '#22c55e',
-            color: '#fff',
+            color: 'var(--text-primary)',
             padding: '2px 8px',
             borderRadius: '4px',
             animation: 'pulse 2s infinite'
@@ -339,7 +339,7 @@ export default function Logs() {
         {totalCount !== null && (
           <span style={{
             fontSize: '14px',
-            color: '#888',
+            color: 'var(--text-secondary)',
             fontWeight: 'normal'
           }}>
             ({totalCount.toLocaleString()} matching logs)
@@ -354,30 +354,30 @@ export default function Logs() {
           gap: '20px',
           marginBottom: '20px',
           padding: '15px',
-          backgroundColor: '#1a1a2e',
+          backgroundColor: 'var(--bg-elevated)',
           borderRadius: '8px',
           flexWrap: 'wrap',
           alignItems: 'center'
         }}>
           <div>
-            <span style={{ color: '#888' }}>Log Directory:</span>{' '}
+            <span style={{ color: 'var(--text-secondary)' }}>Log Directory:</span>{' '}
             <code style={{ color: '#4ade80' }}>{stats.log_directory}</code>
           </div>
           <div>
-            <span style={{ color: '#888' }}>Current File:</span>{' '}
-            <span style={{ color: '#fff' }}>{stats.current_file_size_mb} MB</span>
+            <span style={{ color: 'var(--text-secondary)' }}>Current File:</span>{' '}
+            <span style={{ color: 'var(--text-primary)' }}>{stats.current_file_size_mb} MB</span>
           </div>
           <div>
-            <span style={{ color: '#888' }}>Files:</span>{' '}
-            <span style={{ color: '#fff' }}>{stats.file_count}</span>
+            <span style={{ color: 'var(--text-secondary)' }}>Files:</span>{' '}
+            <span style={{ color: 'var(--text-primary)' }}>{stats.file_count}</span>
             {stats.archive_count > 0 && (
-              <span style={{ color: '#888' }}> (+{stats.archive_count} archived)</span>
+              <span style={{ color: 'var(--text-secondary)' }}> (+{stats.archive_count} archived)</span>
             )}
           </div>
           <div style={{ display: 'flex', gap: '10px' }}>
             {Object.entries(stats.level_counts || {}).map(([level, count]) => (
               <span key={level} style={{
-                color: LEVEL_COLORS[level] || '#888',
+                color: LEVEL_COLORS[level] || 'var(--text-secondary)',
                 fontSize: '12px'
               }}>
                 {level}: {count}
@@ -407,15 +407,15 @@ export default function Logs() {
         <div style={{
           marginBottom: '20px',
           padding: '15px',
-          backgroundColor: '#1a1a2e',
+          backgroundColor: 'var(--bg-elevated)',
           borderRadius: '8px',
-          border: '1px solid #333'
+          border: '1px solid var(--border)'
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-            <h3 style={{ color: '#fff', margin: 0, fontSize: '14px' }}>
+            <h3 style={{ color: 'var(--text-primary)', margin: 0, fontSize: '14px' }}>
               Log Files Storage
             </h3>
-            <span style={{ color: '#666', fontSize: '11px' }}>
+            <span style={{ color: 'var(--text-secondary)', fontSize: '11px' }}>
               All files are searched automatically
             </span>
           </div>
@@ -427,9 +427,9 @@ export default function Logs() {
             {logFiles.map((file, index) => (
               <div key={index} style={{
                 padding: '6px 10px',
-                backgroundColor: '#16162a',
+                backgroundColor: 'var(--bg-surface)',
                 borderRadius: '4px',
-                border: '1px solid #333',
+                border: '1px solid var(--border)',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '8px'
@@ -441,7 +441,7 @@ export default function Logs() {
                 }}>
                   {file.name}
                 </span>
-                <span style={{ color: '#666', fontSize: '10px' }}>
+                <span style={{ color: 'var(--text-secondary)', fontSize: '10px' }}>
                   {file.size_mb}MB
                 </span>
                 {file.type === 'current' && (
@@ -471,7 +471,7 @@ export default function Logs() {
         alignItems: 'flex-end'
       }}>
         <div>
-          <label style={{ color: '#888', fontSize: '12px', display: 'block', marginBottom: '4px' }}>
+          <label style={{ color: 'var(--text-secondary)', fontSize: '12px', display: 'block', marginBottom: '4px' }}>
             Level
           </label>
           <select
@@ -480,9 +480,9 @@ export default function Logs() {
             style={{
               padding: '8px 12px',
               borderRadius: '4px',
-              border: '1px solid #333',
-              backgroundColor: '#1a1a2e',
-              color: '#fff',
+              border: '1px solid var(--border)',
+              backgroundColor: 'var(--bg-elevated)',
+              color: 'var(--text-primary)',
               cursor: 'pointer'
             }}
           >
@@ -493,7 +493,7 @@ export default function Logs() {
         </div>
 
         <div>
-          <label style={{ color: '#888', fontSize: '12px', display: 'block', marginBottom: '4px' }}>
+          <label style={{ color: 'var(--text-secondary)', fontSize: '12px', display: 'block', marginBottom: '4px' }}>
             Logger
           </label>
           <input
@@ -504,16 +504,16 @@ export default function Logs() {
             style={{
               padding: '8px 12px',
               borderRadius: '4px',
-              border: '1px solid #333',
-              backgroundColor: '#1a1a2e',
-              color: '#fff',
+              border: '1px solid var(--border)',
+              backgroundColor: 'var(--bg-elevated)',
+              color: 'var(--text-primary)',
               width: '180px'
             }}
           />
         </div>
 
         <div style={{ position: 'relative' }}>
-          <label style={{ color: '#888', fontSize: '12px', display: 'block', marginBottom: '4px' }}>
+          <label style={{ color: 'var(--text-secondary)', fontSize: '12px', display: 'block', marginBottom: '4px' }}>
             Search
           </label>
           <input
@@ -524,9 +524,9 @@ export default function Logs() {
             style={{
               padding: '8px 12px',
               borderRadius: '4px',
-              border: '1px solid #333',
-              backgroundColor: '#1a1a2e',
-              color: '#fff',
+              border: '1px solid var(--border)',
+              backgroundColor: 'var(--bg-elevated)',
+              color: 'var(--text-primary)',
               width: '200px',
               paddingRight: searchFilter ? '30px' : '12px'
             }}
@@ -553,7 +553,7 @@ export default function Logs() {
         </div>
 
         <div>
-          <label style={{ color: '#888', fontSize: '12px', display: 'block', marginBottom: '4px' }}>
+          <label style={{ color: 'var(--text-secondary)', fontSize: '12px', display: 'block', marginBottom: '4px' }}>
             Per Page
           </label>
           <select
@@ -562,9 +562,9 @@ export default function Logs() {
             style={{
               padding: '8px 12px',
               borderRadius: '4px',
-              border: '1px solid #333',
-              backgroundColor: '#1a1a2e',
-              color: '#fff',
+              border: '1px solid var(--border)',
+              backgroundColor: 'var(--bg-elevated)',
+              color: 'var(--text-primary)',
               cursor: 'pointer'
             }}
           >
@@ -587,7 +587,7 @@ export default function Logs() {
         alignItems: 'flex-end'
       }}>
         <div>
-          <label style={{ color: '#888', fontSize: '12px', display: 'block', marginBottom: '4px' }}>
+          <label style={{ color: 'var(--text-secondary)', fontSize: '12px', display: 'block', marginBottom: '4px' }}>
             Start Date
           </label>
           <input
@@ -597,15 +597,15 @@ export default function Logs() {
             style={{
               padding: '8px 12px',
               borderRadius: '4px',
-              border: '1px solid #333',
-              backgroundColor: '#1a1a2e',
-              color: '#fff'
+              border: '1px solid var(--border)',
+              backgroundColor: 'var(--bg-elevated)',
+              color: 'var(--text-primary)'
             }}
           />
         </div>
 
         <div>
-          <label style={{ color: '#888', fontSize: '12px', display: 'block', marginBottom: '4px' }}>
+          <label style={{ color: 'var(--text-secondary)', fontSize: '12px', display: 'block', marginBottom: '4px' }}>
             End Date
           </label>
           <input
@@ -615,9 +615,9 @@ export default function Logs() {
             style={{
               padding: '8px 12px',
               borderRadius: '4px',
-              border: '1px solid #333',
-              backgroundColor: '#1a1a2e',
-              color: '#fff'
+              border: '1px solid var(--border)',
+              backgroundColor: 'var(--bg-elevated)',
+              color: 'var(--text-primary)'
             }}
           />
         </div>
@@ -628,8 +628,8 @@ export default function Logs() {
             style={{
               padding: '8px 12px',
               borderRadius: '4px',
-              border: '1px solid #333',
-              backgroundColor: '#1a1a2e',
+              border: '1px solid var(--border)',
+              backgroundColor: 'var(--bg-elevated)',
               color: '#9ca3af',
               cursor: 'pointer',
               fontSize: '12px'
@@ -642,8 +642,8 @@ export default function Logs() {
             style={{
               padding: '8px 12px',
               borderRadius: '4px',
-              border: '1px solid #333',
-              backgroundColor: '#1a1a2e',
+              border: '1px solid var(--border)',
+              backgroundColor: 'var(--bg-elevated)',
               color: '#9ca3af',
               cursor: 'pointer',
               fontSize: '12px'
@@ -656,8 +656,8 @@ export default function Logs() {
             style={{
               padding: '8px 12px',
               borderRadius: '4px',
-              border: '1px solid #333',
-              backgroundColor: '#1a1a2e',
+              border: '1px solid var(--border)',
+              backgroundColor: 'var(--bg-elevated)',
               color: '#9ca3af',
               cursor: 'pointer',
               fontSize: '12px'
@@ -692,7 +692,7 @@ export default function Logs() {
               borderRadius: '4px',
               border: 'none',
               backgroundColor: '#3b82f6',
-              color: '#fff',
+              color: 'var(--text-primary)',
               cursor: loading ? 'not-allowed' : 'pointer',
               opacity: loading ? 0.5 : 1
             }}
@@ -707,7 +707,7 @@ export default function Logs() {
               borderRadius: '4px',
               border: 'none',
               backgroundColor: autoRefresh ? '#22c55e' : '#6b7280',
-              color: '#fff',
+              color: 'var(--text-primary)',
               cursor: 'pointer'
             }}
           >
@@ -721,7 +721,7 @@ export default function Logs() {
               borderRadius: '4px',
               border: 'none',
               backgroundColor: autoScroll ? '#8b5cf6' : '#6b7280',
-              color: '#fff',
+              color: 'var(--text-primary)',
               cursor: 'pointer'
             }}
           >
@@ -739,7 +739,7 @@ export default function Logs() {
           flexWrap: 'wrap',
           alignItems: 'center'
         }}>
-          <span style={{ color: '#888', fontSize: '12px' }}>Active filters:</span>
+          <span style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>Active filters:</span>
           {levelFilter !== 'ALL' && (
             <FilterTag
               label={`Level: ${levelFilter}`}
@@ -819,7 +819,7 @@ export default function Logs() {
               padding: '8px 24px',
               borderRadius: '4px',
               border: '1px solid #4b5563',
-              backgroundColor: '#1a1a2e',
+              backgroundColor: 'var(--bg-elevated)',
               color: '#9ca3af',
               cursor: loadingMore ? 'not-allowed' : 'pointer',
               opacity: loadingMore ? 0.5 : 1
@@ -832,26 +832,26 @@ export default function Logs() {
 
       {/* Logs */}
       <div style={{
-        backgroundColor: '#1a1a2e',
+        backgroundColor: 'var(--bg-elevated)',
         borderRadius: '8px',
         overflow: 'hidden',
-        border: '1px solid #333'
+        border: '1px solid var(--border)'
       }}>
         <div style={{
           padding: '10px 15px',
-          backgroundColor: '#16162a',
-          borderBottom: '1px solid #333',
+          backgroundColor: 'var(--bg-surface)',
+          borderBottom: '1px solid var(--border)',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center'
         }}>
-          <span style={{ color: '#888', fontSize: '12px' }}>
+          <span style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>
             Showing {logs.length.toLocaleString()} log entries
             {totalCount !== null && totalCount > logs.length && (
               <span> of {totalCount.toLocaleString()} total</span>
             )}
           </span>
-          <span style={{ color: '#888', fontSize: '12px' }}>
+          <span style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>
             {autoRefresh && !hasActiveFilters && `Refreshing every ${refreshInterval}s`}
           </span>
         </div>
@@ -866,7 +866,7 @@ export default function Logs() {
           }}
         >
           {logs.length === 0 && !loading && (
-            <div style={{ padding: '40px', textAlign: 'center', color: '#666' }}>
+            <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-secondary)' }}>
               No logs found matching your filters
             </div>
           )}
@@ -895,11 +895,11 @@ export default function Logs() {
                   fontSize: '12px'
                 }}
               >
-                <span style={{ color: '#888' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>
                   {formatTimestamp(log.timestamp)}
                 </span>
                 <span style={{
-                  color: LEVEL_COLORS[log.level] || '#888',
+                  color: LEVEL_COLORS[log.level] || 'var(--text-secondary)',
                   fontWeight: 'bold'
                 }}>
                   {log.level}
@@ -913,12 +913,12 @@ export default function Logs() {
                   {log.logger}
                 </span>
                 <span style={{
-                  color: '#e0e0e0',
+                  color: 'var(--text-primary)',
                   wordBreak: 'break-word'
                 }}>
                   {debouncedSearch ? highlightText(log.message, debouncedSearch) : log.message}
                   {log.extra && Object.keys(log.extra).length > 0 && (
-                    <span style={{ color: '#666', marginLeft: '10px' }}>
+                    <span style={{ color: 'var(--text-secondary)', marginLeft: '10px' }}>
                       {JSON.stringify(log.extra)}
                     </span>
                   )}
