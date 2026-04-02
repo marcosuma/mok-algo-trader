@@ -506,9 +506,10 @@ function MarketDataChart({ data, selectedIndicators = [] }) {
     type: 'number',
     domain: xAxisIndexDomain,
     tickFormatter: xAxisTickFormatter,
-    tick: { fill: chartType === 'candlestick' ? '#888' : '#666', fontSize: 10 },
+    tick: { fill: '#8ba3c0', fontSize: 11 },
     axisLine: { stroke: chartType === 'candlestick' ? '#444' : '#ccc' },
     tickLine: { stroke: chartType === 'candlestick' ? '#444' : '#ccc' },
+    stroke: '#8ba3c0',
     hide: true, // Hide X axis on all but last chart
   }
 
@@ -986,7 +987,7 @@ function MarketDataChart({ data, selectedIndicators = [] }) {
       {/* Main Container */}
       <div
         style={{
-          backgroundColor: bgColor,
+          backgroundColor: '#1a2744',
           borderRadius: '8px',
           border: isDarkTheme ? '1px solid #2a2a3e' : '1px solid #e0e0e0',
           overflow: 'visible',
@@ -997,18 +998,24 @@ function MarketDataChart({ data, selectedIndicators = [] }) {
         <div style={{ height: PRICE_CHART_HEIGHT, cursor: isSelecting ? 'crosshair' : 'default' }}>
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart {...commonChartProps}>
-              <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e3050" />
               <XAxis {...commonXAxisProps} />
               <YAxis
                 yAxisId="price"
                 orientation="right"
                 domain={['auto', 'auto']}
-                tick={{ fill: textColor, fontSize: 10 }}
+                tick={{ fill: '#8ba3c0', fontSize: 11 }}
                 axisLine={{ stroke: gridColor }}
                 tickLine={{ stroke: gridColor }}
+                stroke="#8ba3c0"
                 tickFormatter={(v) => v.toFixed(4)}
               />
-              <Tooltip content={<CustomTooltip />} />
+              <Tooltip
+                content={<CustomTooltip />}
+                contentStyle={{ background: '#1a2744', border: '1px solid #1e3050', borderRadius: '6px' }}
+                labelStyle={{ color: '#e2e8f0' }}
+                itemStyle={{ color: '#e2e8f0' }}
+              />
               <Legend wrapperStyle={{ paddingTop: '10px', color: textColor }} />
 
               {/* Candlestick or Line */}
@@ -1059,19 +1066,25 @@ function MarketDataChart({ data, selectedIndicators = [] }) {
         <div style={{ height: VOLUME_CHART_HEIGHT, borderTop: `1px solid ${gridColor}` }}>
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart {...commonChartProps} margin={{ ...commonChartProps.margin, top: 10 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke={gridColor} vertical={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e3050" vertical={false} />
               <XAxis {...commonXAxisProps} />
               <YAxis
                 yAxisId="volume"
                 orientation="right"
                 domain={[0, 'auto']}
-                tick={{ fill: textColor, fontSize: 9 }}
+                tick={{ fill: '#8ba3c0', fontSize: 11 }}
                 axisLine={{ stroke: gridColor }}
                 tickLine={{ stroke: gridColor }}
+                stroke="#8ba3c0"
                 tickFormatter={(v) => v >= 1000000 ? `${(v/1000000).toFixed(1)}M` : v >= 1000 ? `${(v/1000).toFixed(0)}K` : v}
                 width={45}
               />
-              <Tooltip content={<CustomTooltip />} />
+              <Tooltip
+                content={<CustomTooltip />}
+                contentStyle={{ background: '#1a2744', border: '1px solid #1e3050', borderRadius: '6px' }}
+                labelStyle={{ color: '#e2e8f0' }}
+                itemStyle={{ color: '#e2e8f0' }}
+              />
               <Bar
                 yAxisId="volume"
                 dataKey="volume"
@@ -1093,19 +1106,25 @@ function MarketDataChart({ data, selectedIndicators = [] }) {
           <div style={{ height: INDICATOR_CHART_HEIGHT, borderTop: `1px solid ${gridColor}` }}>
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart {...commonChartProps} margin={{ ...commonChartProps.margin, top: 10 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={gridColor} vertical={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e3050" vertical={false} />
                 <XAxis {...commonXAxisProps} />
                 <YAxis
                   yAxisId="rsi"
                   orientation="right"
                   domain={[0, 100]}
                   ticks={[30, 50, 70]}
-                  tick={{ fill: textColor, fontSize: 9 }}
+                  tick={{ fill: '#8ba3c0', fontSize: 11 }}
                   axisLine={{ stroke: gridColor }}
                   tickLine={{ stroke: gridColor }}
+                  stroke="#8ba3c0"
                   width={45}
                 />
-                <Tooltip content={<CustomTooltip />} />
+                <Tooltip
+                  content={<CustomTooltip />}
+                  contentStyle={{ background: '#1a2744', border: '1px solid #1e3050', borderRadius: '6px' }}
+                  labelStyle={{ color: '#e2e8f0' }}
+                  itemStyle={{ color: '#e2e8f0' }}
+                />
                 <ReferenceLine yAxisId="rsi" y={70} stroke="#ef5350" strokeDasharray="3 3" strokeOpacity={0.5} />
                 <ReferenceLine yAxisId="rsi" y={30} stroke="#26a69a" strokeDasharray="3 3" strokeOpacity={0.5} />
                 <ReferenceLine yAxisId="rsi" y={50} stroke={gridColor} strokeDasharray="2 2" />
@@ -1123,19 +1142,25 @@ function MarketDataChart({ data, selectedIndicators = [] }) {
           <div style={{ height: INDICATOR_CHART_HEIGHT, borderTop: `1px solid ${gridColor}` }}>
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart {...commonChartProps} margin={{ ...commonChartProps.margin, top: 10 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={gridColor} vertical={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e3050" vertical={false} />
                 <XAxis {...commonXAxisProps} />
                 <YAxis
                   yAxisId="macd"
                   orientation="right"
                   domain={['auto', 'auto']}
-                  tick={{ fill: textColor, fontSize: 9 }}
+                  tick={{ fill: '#8ba3c0', fontSize: 11 }}
                   axisLine={{ stroke: gridColor }}
                   tickLine={{ stroke: gridColor }}
+                  stroke="#8ba3c0"
                   tickFormatter={(v) => v.toFixed(4)}
                   width={55}
                 />
-                <Tooltip content={<CustomTooltip />} />
+                <Tooltip
+                  content={<CustomTooltip />}
+                  contentStyle={{ background: '#1a2744', border: '1px solid #1e3050', borderRadius: '6px' }}
+                  labelStyle={{ color: '#e2e8f0' }}
+                  itemStyle={{ color: '#e2e8f0' }}
+                />
                 <ReferenceLine yAxisId="macd" y={0} stroke={gridColor} />
                 {/* MACD Histogram as bars */}
                 {categorizedIndicators.macd.filter(ind => ind.isHistogram).map((ind) => (
@@ -1168,19 +1193,25 @@ function MarketDataChart({ data, selectedIndicators = [] }) {
           <div style={{ height: INDICATOR_CHART_HEIGHT, borderTop: `1px solid ${gridColor}` }}>
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart {...commonChartProps} margin={{ ...commonChartProps.margin, top: 10 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={gridColor} vertical={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e3050" vertical={false} />
                 <XAxis {...commonXAxisProps} />
                 <YAxis
                   yAxisId="adx"
                   orientation="right"
                   domain={[0, 100]}
                   ticks={[25, 50, 75]}
-                  tick={{ fill: textColor, fontSize: 9 }}
+                  tick={{ fill: '#8ba3c0', fontSize: 11 }}
                   axisLine={{ stroke: gridColor }}
                   tickLine={{ stroke: gridColor }}
+                  stroke="#8ba3c0"
                   width={45}
                 />
-                <Tooltip content={<CustomTooltip />} />
+                <Tooltip
+                  content={<CustomTooltip />}
+                  contentStyle={{ background: '#1a2744', border: '1px solid #1e3050', borderRadius: '6px' }}
+                  labelStyle={{ color: '#e2e8f0' }}
+                  itemStyle={{ color: '#e2e8f0' }}
+                />
                 <ReferenceLine yAxisId="adx" y={25} stroke={textColor} strokeDasharray="3 3" strokeOpacity={0.5} />
                 {categorizedIndicators.adx.map((ind) => (
                   <Line key={ind.key} yAxisId="adx" type="monotone" dataKey={ind.key} stroke={ind.color} strokeWidth={1.5} dot={false} name={ind.name} isAnimationActive={false} />
@@ -1196,19 +1227,25 @@ function MarketDataChart({ data, selectedIndicators = [] }) {
           <div style={{ height: INDICATOR_CHART_HEIGHT, borderTop: `1px solid ${gridColor}` }}>
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart {...commonChartProps} margin={{ ...commonChartProps.margin, top: 10 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={gridColor} vertical={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e3050" vertical={false} />
                 <XAxis {...commonXAxisProps} />
                 <YAxis
                   yAxisId="atr"
                   orientation="right"
                   domain={[0, 'auto']}
-                  tick={{ fill: textColor, fontSize: 9 }}
+                  tick={{ fill: '#8ba3c0', fontSize: 11 }}
                   axisLine={{ stroke: gridColor }}
                   tickLine={{ stroke: gridColor }}
+                  stroke="#8ba3c0"
                   tickFormatter={(v) => v.toFixed(5)}
                   width={55}
                 />
-                <Tooltip content={<CustomTooltip />} />
+                <Tooltip
+                  content={<CustomTooltip />}
+                  contentStyle={{ background: '#1a2744', border: '1px solid #1e3050', borderRadius: '6px' }}
+                  labelStyle={{ color: '#e2e8f0' }}
+                  itemStyle={{ color: '#e2e8f0' }}
+                />
                 {categorizedIndicators.atr.map((ind) => (
                   <Area key={ind.key} yAxisId="atr" type="monotone" dataKey={ind.key} stroke={ind.color} fill={ind.color} fillOpacity={0.2} strokeWidth={1.5} dot={false} name={ind.name} isAnimationActive={false} />
                 ))}
