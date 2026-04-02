@@ -615,7 +615,7 @@ function OperationDetail() {
                       fontWeight: '500',
                       fontSize: '13px',
                       backgroundColor: 'var(--accent-blue)',
-                      color: '#fff',
+                      color: 'var(--text-primary)',
                       opacity: marketDataLoading ? 0.6 : 1,
                       transition: 'opacity 0.2s ease'
                     }}

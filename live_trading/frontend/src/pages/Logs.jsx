@@ -316,7 +316,7 @@ export default function Logs() {
         {autoRefresh && !hasActiveFilters && (
           <span style={{
             fontSize: '12px',
-            backgroundColor: '#22c55e',
+            backgroundColor: 'var(--accent)',
             color: 'var(--text-primary)',
             padding: '2px 8px',
             borderRadius: '4px',
@@ -361,7 +361,7 @@ export default function Logs() {
         }}>
           <div>
             <span style={{ color: 'var(--text-secondary)' }}>Log Directory:</span>{' '}
-            <code style={{ color: '#4ade80' }}>{stats.log_directory}</code>
+            <code style={{ color: 'var(--accent)' }}>{stats.log_directory}</code>
           </div>
           <div>
             <span style={{ color: 'var(--text-secondary)' }}>Current File:</span>{' '}
@@ -437,7 +437,7 @@ export default function Logs() {
                 <span style={{
                   fontFamily: 'monospace',
                   fontSize: '11px',
-                  color: file.type === 'current' ? '#22c55e' : '#9ca3af'
+                  color: file.type === 'current' ? 'var(--accent)' : '#9ca3af'
                 }}>
                   {file.name}
                 </span>
@@ -447,7 +447,7 @@ export default function Logs() {
                 {file.type === 'current' && (
                   <span style={{
                     fontSize: '9px',
-                    backgroundColor: '#22c55e',
+                    backgroundColor: 'var(--accent)',
                     color: '#000',
                     padding: '1px 4px',
                     borderRadius: '3px',
@@ -540,7 +540,7 @@ export default function Logs() {
                 top: '26px',
                 background: 'none',
                 border: 'none',
-                color: '#6b7280',
+                color: 'var(--text-secondary)',
                 cursor: 'pointer',
                 fontSize: '14px',
                 padding: '4px'
@@ -671,9 +671,9 @@ export default function Logs() {
               style={{
                 padding: '8px 12px',
                 borderRadius: '4px',
-                border: '1px solid #ef4444',
+                border: '1px solid var(--danger)',
                 backgroundColor: 'transparent',
-                color: '#ef4444',
+                color: 'var(--danger)',
                 cursor: 'pointer',
                 fontSize: '12px'
               }}
@@ -691,7 +691,7 @@ export default function Logs() {
               padding: '8px 16px',
               borderRadius: '4px',
               border: 'none',
-              backgroundColor: '#3b82f6',
+              backgroundColor: 'var(--accent-blue)',
               color: 'var(--text-primary)',
               cursor: loading ? 'not-allowed' : 'pointer',
               opacity: loading ? 0.5 : 1
@@ -706,7 +706,7 @@ export default function Logs() {
               padding: '8px 16px',
               borderRadius: '4px',
               border: 'none',
-              backgroundColor: autoRefresh ? '#22c55e' : '#6b7280',
+              backgroundColor: autoRefresh ? 'var(--accent)' : 'var(--text-secondary)',
               color: 'var(--text-primary)',
               cursor: 'pointer'
             }}
@@ -720,7 +720,7 @@ export default function Logs() {
               padding: '8px 16px',
               borderRadius: '4px',
               border: 'none',
-              backgroundColor: autoScroll ? '#8b5cf6' : '#6b7280',
+              backgroundColor: autoScroll ? 'var(--accent-blue)' : 'var(--text-secondary)',
               color: 'var(--text-primary)',
               cursor: 'pointer'
             }}
@@ -750,28 +750,28 @@ export default function Logs() {
           {debouncedSearch && (
             <FilterTag
               label={`Search: "${debouncedSearch}"`}
-              color="#3b82f6"
+              color="var(--accent-blue)"
               onRemove={() => setSearchFilter('')}
             />
           )}
           {debouncedLogger && (
             <FilterTag
               label={`Logger: ${debouncedLogger}`}
-              color="#8b5cf6"
+              color="var(--accent-blue)"
               onRemove={() => setLoggerFilter('')}
             />
           )}
           {startDate && (
             <FilterTag
               label={`From: ${startDate}`}
-              color="#6b7280"
+              color="var(--text-secondary)"
               onRemove={() => setStartDate('')}
             />
           )}
           {endDate && (
             <FilterTag
               label={`To: ${endDate}`}
-              color="#6b7280"
+              color="var(--text-secondary)"
               onRemove={() => setEndDate('')}
             />
           )}
@@ -780,7 +780,7 @@ export default function Logs() {
             style={{
               padding: '2px 8px',
               borderRadius: '4px',
-              border: '1px solid #6b7280',
+              border: '1px solid var(--text-secondary)',
               backgroundColor: 'transparent',
               color: '#9ca3af',
               cursor: 'pointer',
@@ -797,9 +797,9 @@ export default function Logs() {
         <div style={{
           padding: '15px',
           backgroundColor: 'rgba(239, 68, 68, 0.1)',
-          border: '1px solid #ef4444',
+          border: '1px solid var(--danger)',
           borderRadius: '8px',
-          color: '#ef4444',
+          color: 'var(--danger)',
           marginBottom: '20px'
         }}>
           Error: {error}
@@ -888,7 +888,7 @@ export default function Logs() {
                   gap: '15px',
                   alignItems: 'start',
                   cursor: 'pointer',
-                  borderLeft: isSelected ? '3px solid #3b82f6' : `3px solid ${LEVEL_COLORS[log.level] || LEVEL_COLORS.INFO}`,
+                  borderLeft: isSelected ? '3px solid var(--accent-blue)' : `3px solid ${LEVEL_COLORS[log.level] || LEVEL_COLORS.INFO}`,
                   borderRadius: '0 4px 4px 0',
                   transition: 'background-color 0.1s',
                   fontFamily: '"JetBrains Mono", "Fira Code", monospace',
@@ -905,7 +905,7 @@ export default function Logs() {
                   {log.level}
                 </span>
                 <span style={{
-                  color: '#8b5cf6',
+                  color: 'var(--accent-blue)',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap'
@@ -932,7 +932,7 @@ export default function Logs() {
                         style={{
                           padding: '4px 10px',
                           borderRadius: '4px',
-                          border: '1px solid #3b82f6',
+                          border: '1px solid var(--accent-blue)',
                           backgroundColor: 'rgba(59, 130, 246, 0.2)',
                           color: '#60a5fa',
                           cursor: 'pointer',
@@ -963,9 +963,9 @@ export default function Logs() {
           style={{
             padding: '8px 16px',
             borderRadius: '4px',
-            border: '1px solid #ef4444',
+            border: '1px solid var(--danger)',
             backgroundColor: levelFilter === 'ERROR' ? 'rgba(239, 68, 68, 0.2)' : 'transparent',
-            color: '#ef4444',
+            color: 'var(--danger)',
             cursor: 'pointer'
           }}
         >
@@ -989,9 +989,9 @@ export default function Logs() {
           style={{
             padding: '8px 16px',
             borderRadius: '4px',
-            border: '1px solid #3b82f6',
+            border: '1px solid var(--accent-blue)',
             backgroundColor: loggerFilter === 'live_trading.brokers' ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
-            color: '#3b82f6',
+            color: 'var(--accent-blue)',
             cursor: 'pointer'
           }}
         >
@@ -1002,9 +1002,9 @@ export default function Logs() {
           style={{
             padding: '8px 16px',
             borderRadius: '4px',
-            border: '1px solid #22c55e',
+            border: '1px solid var(--accent)',
             backgroundColor: searchFilter === '[CONNECTION]' ? 'rgba(34, 197, 94, 0.2)' : 'transparent',
-            color: '#22c55e',
+            color: 'var(--accent)',
             cursor: 'pointer'
           }}
         >
@@ -1015,9 +1015,9 @@ export default function Logs() {
           style={{
             padding: '8px 16px',
             borderRadius: '4px',
-            border: '1px solid #8b5cf6',
+            border: '1px solid var(--accent-blue)',
             backgroundColor: searchFilter === '[ORDER]' ? 'rgba(139, 92, 246, 0.2)' : 'transparent',
-            color: '#8b5cf6',
+            color: 'var(--accent-blue)',
             cursor: 'pointer'
           }}
         >
@@ -1028,9 +1028,9 @@ export default function Logs() {
           style={{
             padding: '8px 16px',
             borderRadius: '4px',
-            border: '1px solid #6b7280',
+            border: '1px solid var(--text-secondary)',
             backgroundColor: 'transparent',
-            color: '#6b7280',
+            color: 'var(--text-secondary)',
             cursor: 'pointer'
           }}
         >
