@@ -43,6 +43,10 @@ class ConnectionManager:
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
+                    # _restart_in_progress is written here (reactor thread) and read/written
+                    # in _full_restart() (asyncio thread). The GIL prevents data corruption
+                    # but not logic races; duplicate restarts are benign (idempotent guard
+                    # at the top of _full_restart checks _shutdown and returns early).
                     self._restart_in_progress = True
                     loop.call_soon_threadsafe(
                         lambda: asyncio.create_task(self._full_restart())
@@ -60,8 +64,8 @@ class ConnectionManager:
 
     async def disconnect(self) -> None:
         self._shutdown = True
-        self._bus.emit(SystemStopped(reason="Graceful shutdown"))
         if self._broker:
+            self._bus.emit(SystemStopped(reason="Graceful shutdown"))
             await self._broker.disconnect()
 
     async def _full_restart(self) -> None:
