@@ -7,7 +7,7 @@ from live_trading.notifications.connection_event_bus import ConnectionEventBus
 from live_trading.notifications.connection_events import (
     ConnectionDropped, ConnectionRestored, ReconnectAttempt,
     ReconnectExhausted, AuthFailed, SystemStarted, SystemStopped,
-    ConnectionStale, FullRestartAttempt, TokenRefreshFailed,
+    ConnectionStale, FullRestartAttempt, TokenRefreshFailed, FullRestartFailed,
 )
 
 
@@ -131,7 +131,6 @@ class TestTelegramNotifier:
         assert sent == []
 
     def test_full_restart_failed_is_degraded_red(self):
-        from live_trading.notifications.connection_events import FullRestartFailed
         notifier, sent = self._make_notifier()
         notifier.on_event(FullRestartFailed(restart_count=1, attempt=1))
         time.sleep(0.2)
@@ -139,14 +138,12 @@ class TestTelegramNotifier:
         assert "🔴" in sent[0]
 
     def test_full_restart_failed_is_immediate(self):
-        from live_trading.notifications.connection_events import FullRestartFailed
         notifier, sent = self._make_notifier(batch_window=60.0)
         notifier.on_event(FullRestartFailed(restart_count=1, attempt=1))
         time.sleep(0.2)
         assert len(sent) == 1
 
     def test_full_restart_failed_format(self):
-        from live_trading.notifications.connection_events import FullRestartFailed
         notifier, sent = self._make_notifier()
         notifier.on_event(FullRestartFailed(restart_count=2, attempt=3))
         time.sleep(0.2)
