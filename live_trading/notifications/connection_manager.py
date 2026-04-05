@@ -6,7 +6,7 @@ from typing import Callable, Optional
 
 from live_trading.notifications.connection_event_bus import ConnectionEventBus
 from live_trading.notifications.connection_events import (
-    FullRestartAttempt, ReconnectExhausted,
+    FullRestartAttempt, FullRestartFailed, ReconnectExhausted, SystemStopped,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,6 +43,10 @@ class ConnectionManager:
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
+                    # _restart_in_progress is written here (reactor thread) and read/written
+                    # in _full_restart() (asyncio thread). The GIL prevents data corruption
+                    # but not logic races; duplicate restarts are benign (idempotent guard
+                    # at the top of _full_restart checks _shutdown and returns early).
                     self._restart_in_progress = True
                     loop.call_soon_threadsafe(
                         lambda: asyncio.create_task(self._full_restart())
@@ -61,6 +65,7 @@ class ConnectionManager:
     async def disconnect(self) -> None:
         self._shutdown = True
         if self._broker:
+            self._bus.emit(SystemStopped(reason="Graceful shutdown"))
             await self._broker.disconnect()
 
     async def _full_restart(self) -> None:
@@ -93,22 +98,47 @@ class ConnectionManager:
             if self._shutdown:
                 return
 
-            logger.info(f"[ConnectionManager] Starting fresh connection (restart #{self._restart_count})...")
-            try:
-                self._broker = self._broker_factory(self._bus)
-                success = await self._broker.connect()
-                if success:
-                    await self._broker.start_connection_monitor()
-                    logger.info(f"[ConnectionManager] Full restart #{self._restart_count} succeeded.")
-                else:
-                    logger.error(
-                        f"[ConnectionManager] Full restart #{self._restart_count} connect() returned False. "
-                        f"Will retry on next ReconnectExhausted event."
-                    )
-            except Exception:
-                logger.exception(
-                    f"[ConnectionManager] Exception during full restart #{self._restart_count}. "
-                    f"Will retry on next ReconnectExhausted event."
+            attempt = 0
+            while not self._shutdown:
+                attempt += 1
+                logger.info(
+                    f"[ConnectionManager] Starting fresh connection "
+                    f"(restart #{self._restart_count}, attempt {attempt})..."
                 )
+                try:
+                    self._broker = self._broker_factory(self._bus)
+                    success = await self._broker.connect()
+                    if success:
+                        await self._broker.start_connection_monitor()
+                        logger.info(
+                            f"[ConnectionManager] Full restart #{self._restart_count} "
+                            f"attempt {attempt} succeeded."
+                        )
+                        break
+                    else:
+                        logger.error(
+                            f"[ConnectionManager] Full restart #{self._restart_count} "
+                            f"attempt {attempt}: connect() returned False."
+                        )
+                except Exception:
+                    logger.exception(
+                        f"[ConnectionManager] Exception during full restart #{self._restart_count} "
+                        f"attempt {attempt}."
+                    )
+                    if self._broker:
+                        try:
+                            await self._broker.disconnect()
+                        except Exception:
+                            pass
+                        self._broker = None
+
+                if self._shutdown:
+                    break
+
+                self._bus.emit(FullRestartFailed(restart_count=self._restart_count, attempt=attempt))
+                logger.info(
+                    f"[ConnectionManager] Retrying full restart in {self._restart_delay}s..."
+                )
+                await asyncio.sleep(self._restart_delay)
         finally:
             self._restart_in_progress = False

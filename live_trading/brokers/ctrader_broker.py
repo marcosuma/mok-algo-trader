@@ -111,6 +111,7 @@ class CTraderBroker(BaseBroker):
         self._connection_error: Optional[str] = None  # Store connection errors
         self._auth_error: Optional[str] = None  # Store authentication errors
         self._shutdown_requested = False
+        self._reactor_stop_requested = False
 
         # Reconnection state
         self._reconnecting = False
@@ -237,9 +238,9 @@ class CTraderBroker(BaseBroker):
 
     def _stop_reactor(self):
         """Stop Twisted reactor safely from any thread"""
-        if self._shutdown_requested:
+        if self._reactor_stop_requested:
             return
-        self._shutdown_requested = True
+        self._reactor_stop_requested = True
 
         logger.info("Stopping Twisted reactor...")
         try:
@@ -1165,8 +1166,6 @@ class CTraderBroker(BaseBroker):
 
         # Mark shutdown to prevent reconnection attempts
         self._shutdown_requested = True
-        from live_trading.notifications.connection_events import SystemStopped
-        self._event_bus.emit(SystemStopped(reason="Graceful shutdown"))
 
         # Stop connection monitor
         if self._connection_monitor_task:
@@ -1241,10 +1240,10 @@ class CTraderBroker(BaseBroker):
             self._stop_reactor()
             await asyncio.sleep(1)  # Give it time to clean up
 
-            # Reset shutdown flag so _on_disconnected can schedule reconnection again
-            # after this reconnect attempt completes. Without this, any subsequent
-            # disconnect is silently ignored because _stop_reactor() sets the flag to True.
+            # Reset flags so _on_disconnected can schedule reconnection again and
+            # _stop_reactor() can run on the next reconnect attempt.
             self._shutdown_requested = False
+            self._reactor_stop_requested = False
 
             # Reset state
             self.connected = False

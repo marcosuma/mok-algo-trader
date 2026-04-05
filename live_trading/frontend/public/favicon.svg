@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Dark navy background with rounded corners -->
+  <rect width="32" height="32" rx="6" fill="#0a1020"/>
+  <!-- Teal chart line — algo trading motif -->
+  <polyline
+    points="3,24 9,17 14,20 20,11 29,7"
+    fill="none"
+    stroke="#00d4a0"
+    stroke-width="2.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <!-- Small dot at the tip -->
+  <circle cx="29" cy="7" r="2" fill="#00d4a0"/>
+</svg>
