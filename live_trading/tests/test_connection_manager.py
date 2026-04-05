@@ -99,3 +99,52 @@ class TestConnectionManager:
         await manager.disconnect()
 
         assert any(isinstance(e, SystemStopped) for e in events)
+
+    @pytest.mark.asyncio
+    async def test_full_restart_retries_on_connect_failure(self):
+        from live_trading.notifications.connection_events import FullRestartFailed
+        # broker_sequence: [initial (succeeds), fail (restart attempt 1), success (restart attempt 2)]
+        # First restart connect() call returns False, second returns True
+        initial_broker = _make_mock_broker(connect_return=True)
+        fail_broker = _make_mock_broker(connect_return=False)
+        success_broker = _make_mock_broker(connect_return=True)
+        broker_sequence = [initial_broker, fail_broker, success_broker]
+        created = []
+
+        def factory(bus):
+            b = broker_sequence[len(created)]
+            b._event_bus = bus
+            created.append(b)
+            return b
+
+        manager = ConnectionManager(broker_factory=factory, restart_delay_seconds=0)
+        await manager.connect()
+
+        events = []
+        manager._bus.subscribe(events.append)
+
+        manager._bus.emit(ReconnectExhausted(attempts=5))
+        await asyncio.sleep(0.3)
+
+        failed_events = [e for e in events if isinstance(e, FullRestartFailed)]
+        assert len(failed_events) == 1
+        assert failed_events[0].restart_count == 1
+        assert failed_events[0].attempt == 1
+
+        assert success_broker.connect.call_count == 1
+        assert success_broker.start_connection_monitor.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_full_restart_no_failed_event_on_first_success(self):
+        from live_trading.notifications.connection_events import FullRestartFailed
+        broker = _make_mock_broker(connect_return=True)
+        manager = ConnectionManager(broker_factory=lambda bus: broker, restart_delay_seconds=0)
+        await manager.connect()
+
+        events = []
+        manager._bus.subscribe(events.append)
+
+        manager._bus.emit(ReconnectExhausted(attempts=5))
+        await asyncio.sleep(0.1)
+
+        assert not any(isinstance(e, FullRestartFailed) for e in events)
