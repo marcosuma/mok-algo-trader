@@ -150,3 +150,9 @@ class TestTelegramNotifier:
         assert "Full restart #2" in sent[0]
         assert "attempt 3" in sent[0]
         assert "retrying" in sent[0]
+
+    def test_system_started_is_immediate(self):
+        notifier, sent = self._make_notifier(batch_window=60.0)
+        notifier.on_event(SystemStarted(environment="DEMO"))
+        time.sleep(0.2)
+        assert len(sent) == 1
