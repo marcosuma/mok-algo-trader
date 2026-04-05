@@ -27,7 +27,7 @@ _WARNING_TYPES = (ConnectionStale,)
 # Events that must be sent immediately without waiting for the batch window
 _IMMEDIATE_TYPES = (
     ConnectionDropped, ReconnectExhausted, FullRestartAttempt, FullRestartFailed,
-    ConnectionRestored, AuthFailed, TokenRefreshFailed, SystemStopped,
+    ConnectionRestored, SystemStarted, AuthFailed, TokenRefreshFailed, SystemStopped,
 )
 
 
