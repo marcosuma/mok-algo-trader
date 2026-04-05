@@ -14,6 +14,7 @@ def _make_broker(bus):
     broker = object.__new__(CTraderBroker)
     broker._event_bus = bus
     broker._shutdown_requested = False
+    broker._reactor_stop_requested = False
     broker._reconnecting = False
     broker._reconnect_attempts = 0
     broker._max_reconnect_attempts = 5
@@ -83,3 +84,39 @@ class TestBrokerEmitsEvents:
         broker._reconnect_attempts = 5  # already at max
         await broker._attempt_reconnect()
         assert any(isinstance(e, ReconnectExhausted) for e in received)
+
+    def test_stop_reactor_sets_reactor_stop_requested(self, monkeypatch):
+        import live_trading.brokers.ctrader_broker as mod
+        monkeypatch.setattr(mod, 'CTRADER_AVAILABLE', False)
+        bus = ConnectionEventBus()
+        broker = _make_broker(bus)
+        broker._reactor_thread = None
+
+        broker._stop_reactor()
+
+        assert broker._reactor_stop_requested is True
+
+    def test_stop_reactor_runs_even_when_shutdown_requested(self, monkeypatch):
+        """_stop_reactor() must not bail out just because _shutdown_requested is True."""
+        import live_trading.brokers.ctrader_broker as mod
+        monkeypatch.setattr(mod, 'CTRADER_AVAILABLE', False)
+        bus = ConnectionEventBus()
+        broker = _make_broker(bus)
+        broker._reactor_thread = None
+        broker._shutdown_requested = True  # simulates disconnect() being called first
+
+        broker._stop_reactor()
+
+        assert broker._reactor_stop_requested is True
+
+    def test_stop_reactor_is_idempotent(self, monkeypatch):
+        import live_trading.brokers.ctrader_broker as mod
+        monkeypatch.setattr(mod, 'CTRADER_AVAILABLE', False)
+        bus = ConnectionEventBus()
+        broker = _make_broker(bus)
+        broker._reactor_thread = None
+
+        broker._stop_reactor()
+        broker._stop_reactor()  # second call must be a no-op
+
+        assert broker._reactor_stop_requested is True
