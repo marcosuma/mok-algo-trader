@@ -58,6 +58,13 @@ class FullRestartAttempt:
 
 
 @dataclass
+class FullRestartFailed:
+    restart_count: int
+    attempt: int
+    timestamp: datetime = field(default_factory=_now)
+
+
+@dataclass
 class AuthFailed:
     reason: str
     timestamp: datetime = field(default_factory=_now)

@@ -9,7 +9,7 @@ import requests
 
 from live_trading.notifications.connection_events import (
     AuthFailed, ConnectionDropped, ConnectionRestored, ConnectionStale,
-    FullRestartAttempt, ReconnectAttempt, ReconnectExhausted,
+    FullRestartAttempt, FullRestartFailed, ReconnectAttempt, ReconnectExhausted,
     SystemStarted, SystemStopped, TokenRefreshFailed,
 )
 
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # Events that indicate degraded state (🔴)
 _DEGRADED_TYPES = (
     ConnectionDropped, ReconnectAttempt, ReconnectExhausted,
-    FullRestartAttempt, AuthFailed, TokenRefreshFailed, SystemStopped,
+    FullRestartAttempt, FullRestartFailed, AuthFailed, TokenRefreshFailed, SystemStopped,
 )
 # Events that indicate recovery (✅)
 _RECOVERY_TYPES = (ConnectionRestored, SystemStarted)
@@ -26,7 +26,7 @@ _RECOVERY_TYPES = (ConnectionRestored, SystemStarted)
 _WARNING_TYPES = (ConnectionStale,)
 # Events that must be sent immediately without waiting for the batch window
 _IMMEDIATE_TYPES = (
-    ConnectionDropped, ReconnectExhausted, FullRestartAttempt,
+    ConnectionDropped, ReconnectExhausted, FullRestartAttempt, FullRestartFailed,
     ConnectionRestored, AuthFailed, TokenRefreshFailed, SystemStopped,
 )
 
@@ -60,6 +60,11 @@ def _format_event(event) -> str:
         return f"All {event.attempts} reconnect attempts failed — full restart in 5 min"
     if isinstance(event, FullRestartAttempt):
         return f"Full restart #{event.restart_count} — tearing down broker and reconnecting from scratch"
+    if isinstance(event, FullRestartFailed):
+        return (
+            f"Full restart #{event.restart_count} attempt {event.attempt} failed "
+            f"— retrying in 5 min"
+        )
     if isinstance(event, AuthFailed):
         return f"Authentication failed: {event.reason}"
     if isinstance(event, TokenRefreshFailed):
