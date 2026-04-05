@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, call
 from live_trading.notifications.connection_manager import ConnectionManager
 from live_trading.notifications.connection_event_bus import ConnectionEventBus
 from live_trading.notifications.connection_events import (
-    ReconnectExhausted, FullRestartAttempt, SystemStopped,
+    FullRestartAttempt, FullRestartFailed, ReconnectExhausted, SystemStopped,
 )
 
 
@@ -102,7 +102,6 @@ class TestConnectionManager:
 
     @pytest.mark.asyncio
     async def test_full_restart_retries_on_connect_failure(self):
-        from live_trading.notifications.connection_events import FullRestartFailed
         # broker_sequence: [initial (succeeds), fail (restart attempt 1), success (restart attempt 2)]
         # First restart connect() call returns False, second returns True
         initial_broker = _make_mock_broker(connect_return=True)
@@ -136,7 +135,6 @@ class TestConnectionManager:
 
     @pytest.mark.asyncio
     async def test_full_restart_no_failed_event_on_first_success(self):
-        from live_trading.notifications.connection_events import FullRestartFailed
         broker = _make_mock_broker(connect_return=True)
         manager = ConnectionManager(broker_factory=lambda bus: broker, restart_delay_seconds=0)
         await manager.connect()

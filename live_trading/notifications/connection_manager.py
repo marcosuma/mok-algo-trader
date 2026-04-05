@@ -121,6 +121,12 @@ class ConnectionManager:
                         f"[ConnectionManager] Exception during full restart #{self._restart_count} "
                         f"attempt {attempt}."
                     )
+                    if self._broker:
+                        try:
+                            await self._broker.disconnect()
+                        except Exception:
+                            pass
+                        self._broker = None
 
                 if self._shutdown:
                     break
