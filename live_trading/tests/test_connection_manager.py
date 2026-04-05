@@ -90,7 +90,6 @@ class TestConnectionManager:
 
     @pytest.mark.asyncio
     async def test_manager_disconnect_emits_system_stopped(self):
-        from live_trading.notifications.connection_events import SystemStopped
         broker = _make_mock_broker()
         manager = ConnectionManager(broker_factory=lambda bus: broker, restart_delay_seconds=0)
         await manager.connect()
