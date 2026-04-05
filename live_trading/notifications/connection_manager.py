@@ -6,7 +6,7 @@ from typing import Callable, Optional
 
 from live_trading.notifications.connection_event_bus import ConnectionEventBus
 from live_trading.notifications.connection_events import (
-    FullRestartAttempt, ReconnectExhausted,
+    FullRestartAttempt, ReconnectExhausted, SystemStopped,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,6 +60,7 @@ class ConnectionManager:
 
     async def disconnect(self) -> None:
         self._shutdown = True
+        self._bus.emit(SystemStopped(reason="Graceful shutdown"))
         if self._broker:
             await self._broker.disconnect()
 

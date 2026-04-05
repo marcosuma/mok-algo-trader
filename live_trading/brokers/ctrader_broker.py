@@ -1166,8 +1166,6 @@ class CTraderBroker(BaseBroker):
 
         # Mark shutdown to prevent reconnection attempts
         self._shutdown_requested = True
-        from live_trading.notifications.connection_events import SystemStopped
-        self._event_bus.emit(SystemStopped(reason="Graceful shutdown"))
 
         # Stop connection monitor
         if self._connection_monitor_task:

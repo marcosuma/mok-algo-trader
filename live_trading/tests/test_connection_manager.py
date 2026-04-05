@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, call
 from live_trading.notifications.connection_manager import ConnectionManager
 from live_trading.notifications.connection_event_bus import ConnectionEventBus
 from live_trading.notifications.connection_events import (
-    ReconnectExhausted, FullRestartAttempt,
+    ReconnectExhausted, FullRestartAttempt, SystemStopped,
 )
 
 
@@ -87,3 +87,16 @@ class TestConnectionManager:
         await manager.disconnect()
         assert manager._shutdown is True
         broker.disconnect.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_manager_disconnect_emits_system_stopped(self):
+        from live_trading.notifications.connection_events import SystemStopped
+        broker = _make_mock_broker()
+        manager = ConnectionManager(broker_factory=lambda bus: broker, restart_delay_seconds=0)
+        await manager.connect()
+
+        events = []
+        manager._bus.subscribe(events.append)
+        await manager.disconnect()
+
+        assert any(isinstance(e, SystemStopped) for e in events)
