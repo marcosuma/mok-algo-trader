@@ -1,6 +1,7 @@
 """
 FastAPI main application.
 """
+import asyncio
 import logging
 import os
 from fastapi import FastAPI, HTTPException, Depends
@@ -811,12 +812,23 @@ async def startup_event():
 
     journal_manager = JournalManager()
 
-    trading_engine = TradingEngine(broker, adapter, journal_manager)
+    _trading_notifier = None
+    if config.BROKER_TYPE == "CTRADER":
+        from live_trading.notifications.trading_decision_notifier import TradingDecisionNotifier
+        _trading_notifier = TradingDecisionNotifier(
+            bot_token=config.TELEGRAM_BOT_TOKEN,
+            chat_id=config.TELEGRAM_CHAT_ID,
+            environment=config.CTRADER_ENVIRONMENT,
+        )
+
+    trading_engine = TradingEngine(broker, adapter, journal_manager, trading_notifier=_trading_notifier)
     await trading_engine.initialize()
+
+    if _trading_notifier:
+        _trading_notifier.start(asyncio.get_running_loop())
 
     await trading_engine.recover_from_journal()
 
-    import asyncio
     async def periodic_position_sync():
         while True:
             try:
@@ -840,6 +852,8 @@ async def shutdown_event():
     """Shutdown trading engine"""
     global trading_engine
     if trading_engine:
+        if trading_engine._trading_notifier:
+            trading_engine._trading_notifier.stop()
         await trading_engine.shutdown()
 
 

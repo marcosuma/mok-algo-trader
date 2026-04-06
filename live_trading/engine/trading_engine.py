@@ -3,7 +3,7 @@ Trading Engine — orchestrates all trading operations.
 """
 import asyncio
 import logging
-from typing import Dict, List, Optional, Any
+from typing import TYPE_CHECKING, Dict, List, Optional, Any
 from datetime import datetime
 from bson import ObjectId
 
@@ -27,6 +27,8 @@ from live_trading.orders.order_manager import OrderManager
 from live_trading.journal.journal_manager import JournalManager
 from live_trading.engine.operation_runner import OperationRunner
 from live_trading.config import config
+if TYPE_CHECKING:
+    from live_trading.notifications.trading_decision_notifier import TradingDecisionNotifier
 
 logger = logging.getLogger(__name__)
 
@@ -39,16 +41,20 @@ class TradingEngine:
         broker: BaseBroker,
         adapter: BrokerAdapter,
         journal_manager: JournalManager,
+        trading_notifier: Optional["TradingDecisionNotifier"] = None,
     ):
         self.broker = broker
         self.adapter = adapter
         self.journal = journal_manager
+        self._trading_notifier = trading_notifier
 
         from technical_indicators.technical_indicators import TechnicalIndicators
         indicator_calculator = TechnicalIndicators(candlestickData=None, fileToSave=None)
 
         self.data_manager = DataManager(broker, indicator_calculator)
         self.order_manager = OrderManager(adapter, journal_manager)
+        if trading_notifier:
+            self.order_manager.set_trading_notifier(trading_notifier)
         self.reconciler = Reconciler(adapter)
 
         self.active_operations: Dict[ObjectId, OperationRunner] = {}
@@ -163,6 +169,7 @@ class TradingEngine:
             operation_id=operation.id,
             data_manager=self.data_manager,
             order_manager=self.order_manager,
+            trading_notifier=self._trading_notifier,
         )
         await runner.start()
         self.active_operations[operation.id] = runner
@@ -219,6 +226,7 @@ class TradingEngine:
                 operation_id=operation_id,
                 data_manager=self.data_manager,
                 order_manager=self.order_manager,
+                trading_notifier=self._trading_notifier,
             )
             await runner.start()
             self.active_operations[operation_id] = runner
@@ -267,6 +275,7 @@ class TradingEngine:
                 operation_id=operation.id,
                 data_manager=self.data_manager,
                 order_manager=self.order_manager,
+                trading_notifier=self._trading_notifier,
             )
             await runner.start()
             self.active_operations[operation.id] = runner

@@ -8,7 +8,7 @@ Position (hedging mode).
 import asyncio
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from bson import ObjectId
 
@@ -27,6 +27,8 @@ from live_trading.brokers.middleware.types import (
     PositionStatus,
 )
 from live_trading.journal.journal_manager import JournalManager
+if TYPE_CHECKING:
+    from live_trading.notifications.trading_decision_notifier import TradingDecisionNotifier
 from live_trading.models.market_data import MarketData
 from live_trading.models.order import Order
 from live_trading.models.position import Position
@@ -63,11 +65,15 @@ class OrderManager:
         self.adapter = adapter
         self.journal = journal_manager
         self._event_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._trading_notifier: Optional["TradingDecisionNotifier"] = None
 
         if adapter.get_account_mode() == AccountMode.NETTING:
             raise NotImplementedError("Netting mode is not yet supported")
 
         adapter.register_execution_callback(self._on_execution_update)
+
+    def set_trading_notifier(self, notifier: "TradingDecisionNotifier") -> None:
+        self._trading_notifier = notifier
 
     def bind_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Bind the asyncio event loop so broker-thread callbacks can
@@ -183,6 +189,18 @@ class OrderManager:
 
         if order.status == OrderStatus.FILLED and order.intent == OrderIntent.OPEN:
             await self._create_position_from_fill(order, operation)
+            if self._trading_notifier:
+                from live_trading.notifications.trading_events import OrderPlacedDecision
+                self._trading_notifier.record(OrderPlacedDecision(
+                    operation_id=str(operation_id),
+                    asset=asset,
+                    strategy_name=operation.strategy_name,
+                    signal_type=signal_type,
+                    price=order.avg_fill_price or 0.0,
+                    stop_loss=order.stop_loss,
+                    take_profit=order.take_profit,
+                    lot_size=order.filled_quantity or quantity,
+                ))
 
         await self.journal.log_action(
             action_type="ORDER_PLACED",
@@ -400,6 +418,19 @@ class OrderManager:
             f"P/L: {realized_pnl:.2f} ({realized_pnl_pct:.2f}%) | "
             f"Reason: {close_reason.value} | Duration: {position.duration_seconds:.0f}s"
         )
+        if self._trading_notifier:
+            operation = await TradingOperation.get(position.operation_id)
+            if operation:
+                from live_trading.notifications.trading_events import PositionClosedDecision
+                self._trading_notifier.record(PositionClosedDecision(
+                    operation_id=str(position.operation_id),
+                    asset=position.symbol,
+                    strategy_name=operation.strategy_name,
+                    side=position.side.value,
+                    close_price=close_price,
+                    pnl=realized_pnl,
+                    close_reason=close_reason.value,
+                ))
 
     def _on_execution_update(self, update: BrokerOrderUpdate) -> None:
         """Called from the broker thread on every execution event.

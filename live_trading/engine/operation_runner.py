@@ -4,7 +4,7 @@ Operation Runner - Manages a single trading operation.
 import logging
 import asyncio
 from collections import deque
-from typing import Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, Optional, Tuple
 from datetime import datetime, timedelta
 from bson import ObjectId
 
@@ -13,6 +13,8 @@ from live_trading.strategies.strategy_adapter import StrategyAdapter
 from live_trading.orders.order_manager import OrderManager
 from live_trading.models.trading_operation import TradingOperation
 from forex_strategies.strategy_registry import get_strategy
+if TYPE_CHECKING:
+    from live_trading.notifications.trading_decision_notifier import TradingDecisionNotifier
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +26,13 @@ class OperationRunner:
         self,
         operation_id: ObjectId,
         data_manager: DataManager,
-        order_manager: OrderManager
+        order_manager: OrderManager,
+        trading_notifier: Optional["TradingDecisionNotifier"] = None,
     ):
         self.operation_id = operation_id
         self.data_manager = data_manager
         self.order_manager = order_manager
+        self._trading_notifier = trading_notifier
         self.strategy_adapter: Optional[StrategyAdapter] = None
         self.running = False
         self.task: Optional[asyncio.Task] = None
@@ -70,6 +74,8 @@ class OperationRunner:
 
         # Set signal callback
         self.strategy_adapter.set_signal_callback(self._handle_signal)
+        if self._trading_notifier:
+            self.strategy_adapter.set_trading_notifier(self._trading_notifier)
 
         # Register with data manager
         self.data_manager.register_operation(
@@ -1066,12 +1072,32 @@ class OperationRunner:
                                 f"[ORDER] {tag} SELL blocked by trend filter: "
                                 f"close={close_val:.5f} > {ema_col}={ema_val:.5f} (uptrend)"
                             )
+                            if self._trading_notifier:
+                                from live_trading.notifications.trading_events import BlockedDecision
+                                self._trading_notifier.record(BlockedDecision(
+                                    operation_id=operation_id,
+                                    asset=operation.asset,
+                                    strategy_name=operation.strategy_name,
+                                    signal_type=signal_type,
+                                    price=price,
+                                    reason="trend_filter",
+                                ))
                             return
                         elif signal_type == "BUY" and not in_uptrend:
                             logger.info(
                                 f"[ORDER] {tag} BUY blocked by trend filter: "
                                 f"close={close_val:.5f} < {ema_col}={ema_val:.5f} (downtrend)"
                             )
+                            if self._trading_notifier:
+                                from live_trading.notifications.trading_events import BlockedDecision
+                                self._trading_notifier.record(BlockedDecision(
+                                    operation_id=operation_id,
+                                    asset=operation.asset,
+                                    strategy_name=operation.strategy_name,
+                                    signal_type=signal_type,
+                                    price=price,
+                                    reason="trend_filter",
+                                ))
                             return
                     else:
                         logger.debug(f"[ORDER] {tag} Trend filter: {ema_col} not available, skipping filter")
@@ -1097,6 +1123,16 @@ class OperationRunner:
                     f"[ORDER] {tag} Duplicate {signal_type} blocked "
                     f"(already {'LONG' if is_long else 'SHORT'}, pyramiding disabled)"
                 )
+                if self._trading_notifier:
+                    from live_trading.notifications.trading_events import BlockedDecision
+                    self._trading_notifier.record(BlockedDecision(
+                        operation_id=operation_id,
+                        asset=operation.asset,
+                        strategy_name=operation.strategy_name,
+                        signal_type=signal_type,
+                        price=price,
+                        reason="pyramiding",
+                    ))
                 return
 
         # Always use MARKET orders in live trading.

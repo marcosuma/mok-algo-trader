@@ -2,11 +2,14 @@
 Strategy Adapter - Adapts backtesting strategies for live trading.
 """
 import logging
-from typing import Dict, Optional, List
+from typing import TYPE_CHECKING, Dict, Optional, List
 import pandas as pd
 
 from live_trading.data.data_manager import DataManager
 from forex_strategies.base_strategy import BaseForexStrategy
+
+if TYPE_CHECKING:
+    from live_trading.notifications.trading_decision_notifier import TradingDecisionNotifier
 
 logger = logging.getLogger(__name__)
 
@@ -61,10 +64,14 @@ class StrategyAdapter:
 
         # Signal callback
         self.signal_callback: Optional[callable] = None
+        self._trading_notifier: Optional["TradingDecisionNotifier"] = None
 
     def set_signal_callback(self, callback: callable):
         """Set callback for when signals are generated"""
         self.signal_callback = callback
+
+    def set_trading_notifier(self, notifier: "TradingDecisionNotifier") -> None:
+        self._trading_notifier = notifier
 
     async def on_new_bar(self, bar_size: str, bar_data: Dict, indicators: Dict):
         """Called when a new bar is completed"""
@@ -83,6 +90,14 @@ class StrategyAdapter:
 
         if aligned_data is None or aligned_data.empty:
             logger.warning(f"[SIGNAL] {tag} No aligned data available for signal generation")
+            if self._trading_notifier:
+                from live_trading.notifications.trading_events import SkippedDecision
+                self._trading_notifier.record(SkippedDecision(
+                    operation_id=self.operation_id,
+                    asset=self.asset or "?",
+                    strategy_name=self.strategy_class.__name__,
+                    reason="insufficient_data",
+                ))
             return
 
         logger.info(f"[SIGNAL] {tag} Aligned data: {len(aligned_data)} rows, columns: {list(aligned_data.columns)}")
@@ -157,6 +172,14 @@ class StrategyAdapter:
             # Log when no signal is generated (this helps debugging)
             if pd.isna(execute_buy) and pd.isna(execute_sell):
                 logger.info(f"[SIGNAL] {tag} ⚪ No signal generated (HOLD)")
+                if self._trading_notifier:
+                    from live_trading.notifications.trading_events import HoldDecision
+                    self._trading_notifier.record(HoldDecision(
+                        operation_id=self.operation_id,
+                        asset=self.asset or "?",
+                        strategy_name=self.strategy_class.__name__,
+                        price=float(last_row.get("close") or 0.0),
+                    ))
 
         except ValueError as e:
             # ValueError is typically raised for missing required indicators.
@@ -165,9 +188,25 @@ class StrategyAdapter:
             logger.warning(f"[SIGNAL] {tag} ❌ STRATEGY ERROR - Missing required data: {e}")
             logger.warning(f"[SIGNAL] {tag} ❌ Available columns: {list(aligned_data.columns)}")
             logger.warning(f"[SIGNAL] {tag} ❌ Signal generation FAILED - no signal will be produced for this bar")
+            if self._trading_notifier:
+                from live_trading.notifications.trading_events import SkippedDecision
+                self._trading_notifier.record(SkippedDecision(
+                    operation_id=self.operation_id,
+                    asset=self.asset or "?",
+                    strategy_name=self.strategy_class.__name__,
+                    reason=f"strategy_error: {e}",
+                ))
         except Exception as e:
             logger.warning(f"[SIGNAL] {tag} ❌ Unexpected error generating signals: {type(e).__name__}: {e}")
             logger.error(f"[SIGNAL] {tag} ❌ Exception details:", exc_info=True)
+            if self._trading_notifier:
+                from live_trading.notifications.trading_events import SkippedDecision
+                self._trading_notifier.record(SkippedDecision(
+                    operation_id=self.operation_id,
+                    asset=self.asset or "?",
+                    strategy_name=self.strategy_class.__name__,
+                    reason=f"strategy_error: {type(e).__name__}",
+                ))
 
     async def _align_timeframes(self) -> Optional[pd.DataFrame]:
         """Align data from multiple timeframes"""
