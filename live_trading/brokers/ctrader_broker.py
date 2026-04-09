@@ -312,12 +312,17 @@ class CTraderBroker(BaseBroker):
             return False
 
         # Stop the existing client service on the reactor thread.
-        if self.client:
+        # IMPORTANT: clear self.client BEFORE scheduling the stop so that the
+        # _on_disconnected callback triggered by stopService() sees self.client=None
+        # and knows it is a stale/intentional disconnect (not a real drop).
+        old_client = self.client
+        self.client = None
+        if old_client is not None:
             stop_done = threading.Event()
 
             def _stop_client():
                 try:
-                    self.client.stopService()
+                    old_client.stopService()
                 except Exception as exc:
                     logger.debug(f"[CONNECTION] Error stopping existing client: {exc}")
                 finally:
@@ -325,7 +330,6 @@ class CTraderBroker(BaseBroker):
 
             reactor.callFromThread(_stop_client)
             stop_done.wait(timeout=3.0)
-            self.client = None
 
         # Reset connection state.
         self.connected = False
@@ -657,6 +661,14 @@ class CTraderBroker(BaseBroker):
 
     def _on_disconnected(self, client: Client, reason):
         """Callback when client disconnects - runs on reactor thread"""
+        # Ignore stale disconnects from a client that has already been replaced.
+        # This happens when _reconnect_in_place() calls stopService() on the old
+        # client — the resulting _on_disconnected must not clobber the new
+        # connection state that _create_and_connect_client() is building up.
+        if client is not getattr(self, "client", None):
+            logger.debug(f"[CONNECTION] Ignoring stale disconnect (replaced client): {reason}")
+            return
+
         logger.error(f"[CONNECTION] ❌ DISCONNECTED from cTrader: {reason}")
         from live_trading.notifications.connection_events import ConnectionDropped
         self._event_bus.emit(ConnectionDropped(reason=str(reason)))

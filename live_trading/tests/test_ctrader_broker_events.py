@@ -38,7 +38,10 @@ class TestBrokerEmitsEvents:
         received = []
         bus.subscribe(received.append)
         broker = _make_broker(bus)
-        broker._on_disconnected(MagicMock(), "Connection refused")
+        # self.client must match the calling client so the stale-client guard passes.
+        client_mock = MagicMock()
+        broker.client = client_mock
+        broker._on_disconnected(client_mock, "Connection refused")
         assert any(isinstance(e, ConnectionDropped) for e in received)
         dropped = next(e for e in received if isinstance(e, ConnectionDropped))
         assert "Connection refused" in dropped.reason
