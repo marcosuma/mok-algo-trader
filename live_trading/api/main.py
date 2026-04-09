@@ -771,22 +771,18 @@ async def startup_event():
                 "cTrader broker requested but 'ctrader-open-api' module not found. "
                 "Please install cTrader Open API: pip install ctrader-open-api"
             )
-        from live_trading.notifications.connection_manager import ConnectionManager
+        from live_trading.brokers.ctrader_broker_proxy import CTraderBrokerProxy
         from live_trading.notifications.telegram_notifier import TelegramNotifier
 
-        def _make_ctrader_broker(bus):
-            return CTraderBroker(event_bus=bus)
-
-        _manager = ConnectionManager(broker_factory=_make_ctrader_broker)
+        broker = CTraderBrokerProxy()
         _notifier = TelegramNotifier(
             bot_token=config.TELEGRAM_BOT_TOKEN,
             chat_id=config.TELEGRAM_CHAT_ID,
             environment=config.CTRADER_ENVIRONMENT,
         )
-        _manager._bus.subscribe(_notifier.on_event)
+        broker.event_bus.subscribe(_notifier.on_event)
 
-        connected = await _manager.connect()
-        broker = _manager._broker
+        connected = await broker.connect()
         if not connected:
             logger.warning(
                 "Failed to connect to cTrader. Make sure CTRADER_CLIENT_ID, CTRADER_CLIENT_SECRET, "

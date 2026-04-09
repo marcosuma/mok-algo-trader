@@ -48,9 +48,11 @@ class CTraderAdapter(BrokerAdapter):
     """Wraps ``CTraderBroker`` and exposes the ``BrokerAdapter`` interface."""
 
     def __init__(self, ctrader_broker):
+        # Accept both CTraderBroker and CTraderBrokerProxy (duck-typed).
         from live_trading.brokers.ctrader_broker import CTraderBroker
-        if not isinstance(ctrader_broker, CTraderBroker):
-            raise TypeError("CTraderAdapter requires a CTraderBroker instance")
+        from live_trading.brokers.ctrader_broker_proxy import CTraderBrokerProxy
+        if not isinstance(ctrader_broker, (CTraderBroker, CTraderBrokerProxy)):
+            raise TypeError("CTraderAdapter requires a CTraderBroker or CTraderBrokerProxy instance")
 
         self._broker = ctrader_broker
         self._execution_callback: Optional[Callable[[BrokerOrderUpdate], None]] = None

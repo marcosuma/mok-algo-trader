@@ -299,6 +299,130 @@ class CTraderBroker(BaseBroker):
         except Exception:
             pass
 
+    async def _reconnect_in_place(self) -> bool:
+        """Restart the TCP client without stopping the Twisted reactor.
+
+        This is the correct way to reconnect: the reactor stays alive so it can
+        be reused, only the ``Client`` service is stopped and recreated.  Calling
+        ``_stop_reactor()`` followed by ``connect()`` is BROKEN because Twisted's
+        reactor raises ``ReactorNotRestartable`` on a second ``reactor.run()`` call.
+        """
+        if not CTRADER_AVAILABLE or not reactor.running:
+            logger.error("[CONNECTION] Cannot reconnect in place: reactor not running")
+            return False
+
+        # Stop the existing client service on the reactor thread.
+        if self.client:
+            stop_done = threading.Event()
+
+            def _stop_client():
+                try:
+                    self.client.stopService()
+                except Exception as exc:
+                    logger.debug(f"[CONNECTION] Error stopping existing client: {exc}")
+                finally:
+                    stop_done.set()
+
+            reactor.callFromThread(_stop_client)
+            stop_done.wait(timeout=3.0)
+            self.client = None
+
+        # Reset connection state.
+        self.connected = False
+        self.authenticated = False
+        self._connection_error = None
+        self._auth_error = None
+
+        # Determine host/port from current config.
+        environment = config.CTRADER_ENVIRONMENT.upper()
+        host = EndPoints.PROTOBUF_LIVE_HOST if environment == "LIVE" else EndPoints.PROTOBUF_DEMO_HOST
+        port = EndPoints.PROTOBUF_PORT
+
+        return await self._create_and_connect_client(host, port)
+
+    async def _create_and_connect_client(self, host: str, port: int) -> bool:
+        """Create a fresh Client on the already-running reactor and wait for auth.
+
+        Precondition: the Twisted reactor must already be running.
+        """
+        client_created = threading.Event()
+        client_error: list = [None]
+
+        def create_client_on_reactor():
+            try:
+                logger.info(f"[Reactor Thread] Creating Client({host}, {port}, TcpProtocol)")
+                self.client = Client(host, port, TcpProtocol)
+                self.client.setConnectedCallback(self._on_connected)
+                self.client.setDisconnectedCallback(self._on_disconnected)
+                self.client.setMessageReceivedCallback(self._on_message_received)
+                logger.info("[Reactor Thread] Starting client service...")
+                self.client.startService()
+                logger.info("[Reactor Thread] Client service started")
+                client_created.set()
+            except Exception as e:
+                logger.error(f"[Reactor Thread] Error creating client: {e}", exc_info=True)
+                client_error[0] = str(e)
+                client_created.set()
+
+        reactor.callFromThread(create_client_on_reactor)
+
+        logger.info("Waiting for client to be created on reactor thread...")
+        if not client_created.wait(timeout=10.0):
+            logger.error("✗ Timeout waiting for client creation on reactor thread")
+            return False
+
+        if client_error[0]:
+            logger.error(f"✗ Error creating client: {client_error[0]}")
+            return False
+
+        logger.info("✓ Client created and service started on reactor thread")
+
+        # Wait for TCP connection.
+        max_wait = 300
+        waited = 0
+        while not self.connected and waited < max_wait:
+            if self._connection_error:
+                logger.error(f"✗ Connection failed: {self._connection_error}")
+                return False
+            await asyncio.sleep(0.5)
+            waited += 0.5
+            if waited % 5 == 0:
+                logger.info(f"  Still waiting for connection... ({waited}s)")
+
+        if not self.connected:
+            error_msg = self._connection_error or "Connection timeout - no response from server"
+            logger.error(f"✗ Failed to connect to cTrader: {error_msg}")
+            logger.error("  Possible causes:")
+            logger.error("  - Network connectivity issues")
+            logger.error("  - Firewall blocking the connection")
+            logger.error("  - cTrader server is down")
+            logger.error(f"  - Check if {host}:{port} is reachable")
+            return False
+
+        # Wait for authentication.
+        logger.info("Waiting for authentication to complete...")
+        max_wait = 300
+        waited = 0
+        while not self.authenticated and not self._auth_error and waited < max_wait:
+            await asyncio.sleep(0.5)
+            waited += 0.5
+            if waited % 5 == 0:
+                logger.info(f"  Still waiting for authentication... ({waited}s)")
+
+        if self._auth_error:
+            logger.error(f"✗ Authentication failed: {self._auth_error}")
+            return False
+
+        if not self.authenticated:
+            logger.error("✗ Authentication timeout - no response from server")
+            logger.error("  Possible causes:")
+            logger.error("  - Invalid CTRADER_CLIENT_ID or CTRADER_CLIENT_SECRET")
+            logger.error("  - Invalid or expired access token (auto-refresh may have failed)")
+            logger.error("  - No trading accounts linked to this access token")
+            return False
+
+        return True
+
     def _on_connected(self, client: Client):
         """Callback when client connects - runs on reactor thread"""
         logger.info("[CONNECTION] ✅ Connected to cTrader server")
@@ -1056,95 +1180,8 @@ class CTraderBroker(BaseBroker):
                 logger.error("✗ Twisted reactor failed to start")
                 return False
 
-            # Create client - must be done on reactor thread
-            logger.info("Creating cTrader client on reactor thread...")
-
-            # Use an event to signal when client is created
-            client_created = threading.Event()
-            client_error = [None]  # Use list to allow modification in closure
-
-            def create_client_on_reactor():
-                """Create and start client on the reactor thread"""
-                try:
-                    logger.info(f"[Reactor Thread] Creating Client({host}, {port}, TcpProtocol)")
-                    self.client = Client(host, port, TcpProtocol)
-
-                    # Set callbacks
-                    logger.info("[Reactor Thread] Setting callbacks...")
-                    self.client.setConnectedCallback(self._on_connected)
-                    self.client.setDisconnectedCallback(self._on_disconnected)
-                    self.client.setMessageReceivedCallback(self._on_message_received)
-
-                    # Start client service
-                    logger.info("[Reactor Thread] Starting client service...")
-                    self.client.startService()
-                    logger.info("[Reactor Thread] Client service started")
-
-                    client_created.set()
-                except Exception as e:
-                    logger.error(f"[Reactor Thread] Error creating client: {e}", exc_info=True)
-                    client_error[0] = str(e)
-                    client_created.set()
-
-            # Schedule client creation on the reactor thread
-            # This is CRITICAL - Twisted operations must run on the reactor thread
-            reactor.callFromThread(create_client_on_reactor)
-
-            # Wait for client to be created
-            logger.info("Waiting for client to be created on reactor thread...")
-            if not client_created.wait(timeout=10.0):
-                logger.error("✗ Timeout waiting for client creation on reactor thread")
-                return False
-
-            if client_error[0]:
-                logger.error(f"✗ Error creating client: {client_error[0]}")
-                return False
-
-            logger.info("✓ Client created and service started on reactor thread")
-
-            # Wait for connection (with timeout)
-            max_wait = 300
-            waited = 0
-            while not self.connected and waited < max_wait:
-                # Check for connection errors
-                if self._connection_error:
-                    logger.error(f"✗ Connection failed: {self._connection_error}")
-                    return False
-                await asyncio.sleep(0.5)
-                waited += 0.5
-                if waited % 5 == 0:
-                    logger.info(f"  Still waiting for connection... ({waited}s)")
-
-            if not self.connected:
-                error_msg = self._connection_error or "Connection timeout - no response from server"
-                logger.error(f"✗ Failed to connect to cTrader: {error_msg}")
-                logger.error("  Possible causes:")
-                logger.error("  - Network connectivity issues")
-                logger.error("  - Firewall blocking the connection")
-                logger.error("  - cTrader server is down")
-                logger.error(f"  - Check if {host}:{port} is reachable")
-                return False
-
-            # Wait for authentication
-            logger.info("Waiting for authentication to complete...")
-            max_wait = 300
-            waited = 0
-            while not self.authenticated and not self._auth_error and waited < max_wait:
-                await asyncio.sleep(0.5)
-                waited += 0.5
-                if waited % 5 == 0:
-                    logger.info(f"  Still waiting for authentication... ({waited}s)")
-
-            if self._auth_error:
-                logger.error(f"✗ Authentication failed: {self._auth_error}")
-                return False
-
-            if not self.authenticated:
-                logger.error("✗ Authentication timeout - no response from server")
-                logger.error("  Possible causes:")
-                logger.error("  - Invalid CTRADER_CLIENT_ID or CTRADER_CLIENT_SECRET")
-                logger.error("  - Invalid or expired access token (auto-refresh may have failed)")
-                logger.error("  - No trading accounts linked to this access token")
+            # Create client and wait for connection + auth.
+            if not await self._create_and_connect_client(host, port):
                 return False
 
             logger.info("=" * 60)
@@ -1236,30 +1273,23 @@ class CTraderBroker(BaseBroker):
             saved_callback_ids = {asset: list(ids) for asset, ids in self._data_callback_ids.items()}
             saved_trendbar_subs = {asset: set(periods) for asset, periods in self._trendbar_subscriptions.items()}
 
-            # Stop existing reactor
-            self._stop_reactor()
-            await asyncio.sleep(1)  # Give it time to clean up
-
-            # Reset flags so _on_disconnected can schedule reconnection again and
-            # _stop_reactor() can run on the next reconnect attempt.
+            # Reset flags so _on_disconnected can schedule reconnection again on
+            # the next drop.  Do NOT call _stop_reactor(): Twisted's reactor raises
+            # ReactorNotRestartable if reactor.run() is called a second time, so
+            # stopping it here would permanently break all future reconnect attempts.
             self._shutdown_requested = False
             self._reactor_stop_requested = False
 
-            # Reset state
-            self.connected = False
-            self.authenticated = False
-            self._connection_error = None
-            self._auth_error = None
-            # Clear subscription tracking (will be rebuilt)
+            # Clear subscription tracking (will be rebuilt after reconnect succeeds).
             self._data_subscriptions.clear()
             self._data_callbacks.clear()
             self._data_callback_ids.clear()
             self._trendbar_subscriptions.clear()
             self._live_trendbar_volumes.clear()
 
-            # Attempt to reconnect
-            logger.info(f"[CONNECTION] 🔄 Connecting to cTrader...")
-            success = await self.connect()
+            # Reconnect the TCP client while keeping the reactor alive.
+            logger.info(f"[CONNECTION] 🔄 Reconnecting cTrader client (reactor stays running)...")
+            success = await self._reconnect_in_place()
 
             if success:
                 logger.info(f"[CONNECTION] ✅ RECONNECTED SUCCESSFULLY!")
