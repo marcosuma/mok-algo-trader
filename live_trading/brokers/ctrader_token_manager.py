@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Optional
@@ -21,7 +22,19 @@ from live_trading.config import config
 
 logger = logging.getLogger(__name__)
 
-_TOKEN_FILE = Path(__file__).resolve().parents[2] / ".ctrader_tokens.json"
+# Token file location: prefer LOG_DIR (writable under ProtectSystem=strict systemd
+# config) over the project root.  Can also be overridden explicitly via
+# CTRADER_TOKEN_FILE env var.
+def _resolve_token_file() -> Path:
+    explicit = os.environ.get("CTRADER_TOKEN_FILE")
+    if explicit:
+        return Path(explicit)
+    log_dir = os.environ.get("LOG_DIR")
+    if log_dir:
+        return Path(log_dir) / ".ctrader_tokens.json"
+    return Path(__file__).resolve().parents[2] / ".ctrader_tokens.json"
+
+_TOKEN_FILE = _resolve_token_file()
 _REFRESH_URL = "https://openapi.ctrader.com/apps/token"
 
 REFRESH_MARGIN_SECONDS = 3600
@@ -44,6 +57,10 @@ class CTraderTokenManager:
     ):
         self._client_id = client_id or config.CTRADER_CLIENT_ID or ""
         self._client_secret = client_secret or config.CTRADER_CLIENT_SECRET or ""
+        # Track whether the caller passed an explicit path (tests do this).
+        # The migration fallback to the legacy location is only attempted when
+        # using the auto-resolved path, not a test-supplied temp file.
+        self._explicit_token_file = token_file is not None
         self._token_file = token_file or _TOKEN_FILE
 
         self._access_token: Optional[str] = None
@@ -143,20 +160,43 @@ class CTraderTokenManager:
             return False
 
     def _load(self) -> None:
-        """Bootstrap tokens from the on-disk file, falling back to env var."""
-        if self._token_file.exists():
-            try:
-                data = json.loads(self._token_file.read_text())
-                self._access_token = data.get("access_token")
-                self._refresh_token = data.get("refresh_token")
-                self._expires_at = data.get("expires_at", 0.0)
-                logger.info(
-                    f"[TOKEN] Loaded tokens from {self._token_file.name} "
-                    f"(expires_at={self._expires_at:.0f})"
-                )
-                return
-            except (json.JSONDecodeError, OSError) as exc:
-                logger.warning(f"[TOKEN] Could not read {self._token_file}: {exc}")
+        """Bootstrap tokens from the on-disk file, falling back to env var.
+
+        Also handles migration: if the primary token file doesn't exist but the
+        legacy project-root location does, copy it to the primary location so
+        that subsequent saves go to the writable path.
+        """
+        # Try the configured (primary) location first
+        candidates = [self._token_file]
+
+        # Migration: if using the auto-resolved path (not an explicit test path)
+        # and the primary location differs from the legacy project-root location,
+        # fall back to the legacy file so existing tokens are picked up on first
+        # deploy after this change.
+        if not self._explicit_token_file:
+            legacy = Path(__file__).resolve().parents[2] / ".ctrader_tokens.json"
+            if legacy != self._token_file and legacy.exists():
+                candidates.append(legacy)
+
+        for path in candidates:
+            if path.exists():
+                try:
+                    data = json.loads(path.read_text())
+                    self._access_token = data.get("access_token")
+                    self._refresh_token = data.get("refresh_token")
+                    self._expires_at = data.get("expires_at", 0.0)
+                    logger.info(
+                        f"[TOKEN] Loaded tokens from {path} "
+                        f"(expires_at={self._expires_at:.0f})"
+                    )
+                    if path != self._token_file:
+                        logger.info(
+                            f"[TOKEN] Migrating token file → {self._token_file}"
+                        )
+                        self._save()  # copy to writable location
+                    return
+                except (json.JSONDecodeError, OSError) as exc:
+                    logger.warning(f"[TOKEN] Could not read {path}: {exc}")
 
         env_token = config.CTRADER_ACCESS_TOKEN
         if env_token:

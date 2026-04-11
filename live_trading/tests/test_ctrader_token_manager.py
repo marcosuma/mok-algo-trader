@@ -126,6 +126,8 @@ class TestRefresh:
 
     @patch("live_trading.brokers.ctrader_token_manager.requests.get")
     def test_refresh_api_error(self, mock_get, manager: CTraderTokenManager):
+        # Set a known token so we can verify it is NOT changed on failure
+        manager._access_token = "original_token"
         manager._refresh_token = "rt"
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -138,7 +140,7 @@ class TestRefresh:
         mock_get.return_value = mock_resp
 
         assert manager.force_refresh() is False
-        assert manager._access_token is None
+        assert manager._access_token == "original_token"  # unchanged on failure
 
     @patch("live_trading.brokers.ctrader_token_manager.requests.get")
     def test_refresh_http_failure(self, mock_get, manager: CTraderTokenManager):

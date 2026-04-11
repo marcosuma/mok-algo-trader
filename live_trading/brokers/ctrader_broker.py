@@ -582,6 +582,8 @@ class CTraderBroker(BaseBroker):
             error_msg = "No trading accounts found. Check your access token and account permissions."
             logger.error(f"[Reactor Thread] ✗ {error_msg}")
             self._auth_error = error_msg
+            from live_trading.notifications.connection_events import AuthFailed
+            self._event_bus.emit(AuthFailed(reason=error_msg))
             return
 
         # Use first account (or find by account_id if specified)
