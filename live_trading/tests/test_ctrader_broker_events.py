@@ -30,6 +30,7 @@ def _make_broker(bus):
     broker._live_trendbar_volumes = {}
     broker._last_message_time = None
     broker._connection_monitor_task = None
+    broker._asyncio_loop = None
     return broker
 
 

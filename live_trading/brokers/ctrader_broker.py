@@ -120,6 +120,10 @@ class CTraderBroker(BaseBroker):
         self._reconnect_delay = 5  # seconds
         self._last_message_time: Optional[datetime] = None
         self._connection_monitor_task: Optional[asyncio.Task] = None
+        # Saved asyncio event loop — captured in connect() (which is always called
+        # from asyncio context) so that _on_disconnected (which runs on the Twisted
+        # reactor thread) can schedule _attempt_reconnect via call_soon_threadsafe.
+        self._asyncio_loop: Optional[asyncio.AbstractEventLoop] = None
 
         # Connection event bus (optional; creates a default bus if not provided)
         from live_trading.notifications.connection_event_bus import ConnectionEventBus as _EventBus
@@ -711,20 +715,14 @@ class CTraderBroker(BaseBroker):
         # Trigger reconnection if not shutting down
         if not self._shutdown_requested and not self._reconnecting:
             logger.info(f"[CONNECTION] 🔄 Will attempt to reconnect (was_connected={was_connected})...")
-            # Schedule reconnection on asyncio loop
-            try:
-                # Try to get the running loop
-                try:
-                    loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    loop = asyncio.get_event_loop()
-
-                if loop and loop.is_running():
-                    loop.call_soon_threadsafe(lambda: asyncio.create_task(self._attempt_reconnect()))
-                else:
-                    logger.error(f"[CONNECTION] ❌ No running event loop - cannot schedule reconnection!")
-            except Exception as e:
-                logger.error(f"[CONNECTION] ❌ Failed to schedule reconnection: {e}", exc_info=True)
+            loop = self._asyncio_loop
+            if loop and loop.is_running():
+                loop.call_soon_threadsafe(lambda: asyncio.create_task(self._attempt_reconnect()))
+            else:
+                logger.error(
+                    "[CONNECTION] ❌ No asyncio loop reference — reconnect will be picked up "
+                    "by connection monitor in %ds", 30
+                )
         elif self._shutdown_requested:
             logger.info(f"[CONNECTION] Shutdown requested - not reconnecting")
         elif self._reconnecting:
@@ -1166,6 +1164,13 @@ class CTraderBroker(BaseBroker):
                 "ctrader-open-api module not available. Please install: pip install ctrader-open-api"
             )
             return False
+
+        # Capture the running asyncio loop so that _on_disconnected (which runs
+        # on the Twisted reactor thread) can call call_soon_threadsafe on it.
+        # Python 3.10+ raises RuntimeError in get_event_loop() when called from
+        # a non-asyncio thread, so we must store the reference here while we're
+        # still in asyncio context.
+        self._asyncio_loop = asyncio.get_running_loop()
 
         # Reset state
         self._connection_error = None
