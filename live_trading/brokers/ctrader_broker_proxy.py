@@ -47,8 +47,13 @@ class CTraderBrokerProxy:
     # Initialisation
     # -----------------------------------------------------------------------
 
-    def __init__(self, restart_delay_seconds: int = _RESTART_DELAY_SECONDS) -> None:
+    def __init__(
+        self,
+        restart_delay_seconds: int = _RESTART_DELAY_SECONDS,
+        log_dir: Optional[str] = None,
+    ) -> None:
         self._restart_delay = restart_delay_seconds
+        self._log_dir = log_dir
 
         # Public event bus – TelegramNotifier subscribes to this.
         self.event_bus = ConnectionEventBus()
@@ -119,7 +124,7 @@ class CTraderBrokerProxy:
         self._event_queue = _MP_CTX.Queue(maxsize=20_000)
         self._process = _MP_CTX.Process(
             target=run_worker,
-            args=(self._cmd_queue, self._event_queue),
+            args=(self._cmd_queue, self._event_queue, self._log_dir),
             daemon=True,
             name="CTraderWorker",
         )

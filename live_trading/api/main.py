@@ -774,7 +774,7 @@ async def startup_event():
         from live_trading.brokers.ctrader_broker_proxy import CTraderBrokerProxy
         from live_trading.notifications.telegram_notifier import TelegramNotifier
 
-        broker = CTraderBrokerProxy()
+        broker = CTraderBrokerProxy(log_dir=os.environ.get("LOG_DIR", "logs"))
         _notifier = TelegramNotifier(
             bot_token=config.TELEGRAM_BOT_TOKEN,
             chat_id=config.TELEGRAM_CHAT_ID,

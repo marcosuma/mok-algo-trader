@@ -23,19 +23,71 @@ Results and events are sent back via ``event_queue``:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import threading
+from datetime import datetime, timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
-def run_worker(cmd_queue, event_queue) -> None:
+class _JsonFileHandler(logging.Handler):
+    """Appends JSON log entries to a file — same format as the main process."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__()
+        self._path = path
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            entry = {
+                "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "level": record.levelname,
+                "logger": record.name,
+                "message": self.format(record),
+                "extra": None,
+            }
+            if record.exc_info:
+                entry["extra"] = {"exception": self.formatException(record.exc_info)}
+            line = json.dumps(entry) + "\n"
+            # 'a' mode + unbuffered writes are atomic for small payloads on Linux.
+            with open(self._path, "a", encoding="utf-8") as fh:
+                fh.write(line)
+        except Exception:
+            self.handleError(record)
+
+
+def _setup_subprocess_logging(log_dir: str | None) -> None:
+    """Configure logging for the subprocess.
+
+    If *log_dir* is provided, append JSON entries to the same
+    ``live_trading.log`` file used by the main process so that all
+    ``[CONNECTION]`` and ``[ctrader-worker]`` output is visible and
+    diagnosable.  Falls back to basicConfig (stderr) when log_dir is absent.
+    """
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    # Remove any handlers inherited from the spawned process context.
+    root.handlers.clear()
+
+    if log_dir:
+        log_path = os.path.join(log_dir, "live_trading.log")
+        handler = _JsonFileHandler(log_path)
+        # Plain message only — timestamp/level/logger are in the JSON envelope.
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        root.addHandler(handler)
+    else:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [ctrader-worker] %(name)s %(levelname)s %(message)s",
+        )
+
+
+def run_worker(cmd_queue, event_queue, log_dir: str | None = None) -> None:
     """Entry point called by ``multiprocessing.Process``."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [ctrader-worker] %(name)s %(levelname)s %(message)s",
-    )
+    _setup_subprocess_logging(log_dir)
     try:
         asyncio.run(_worker_main(cmd_queue, event_queue))
     except Exception as exc:
