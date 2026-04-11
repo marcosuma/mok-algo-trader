@@ -344,6 +344,29 @@ class CTraderBroker(BaseBroker):
 
         return await self._create_and_connect_client(host, port)
 
+    def _stop_current_client(self) -> None:
+        """Clear self.client and stop its TCP service on the reactor thread.
+
+        Must be called BEFORE any ``stopService()`` so that the guard in
+        ``_on_disconnected`` sees ``self.client is None`` and suppresses the
+        resulting disconnect callback.
+        """
+        client_to_stop = self.client
+        self.client = None  # guard first
+        if client_to_stop is not None and CTRADER_AVAILABLE and reactor.running:
+            stop_done = threading.Event()
+
+            def _do_stop():
+                try:
+                    client_to_stop.stopService()
+                except Exception as exc:
+                    logger.debug(f"[CONNECTION] Error stopping failed client: {exc}")
+                finally:
+                    stop_done.set()
+
+            reactor.callFromThread(_do_stop)
+            stop_done.wait(timeout=3.0)
+
     async def _create_and_connect_client(self, host: str, port: int) -> bool:
         """Create a fresh Client on the already-running reactor and wait for auth.
 
@@ -415,6 +438,12 @@ class CTraderBroker(BaseBroker):
 
         if self._auth_error:
             logger.error(f"✗ Authentication failed: {self._auth_error}")
+            # Clear self.client BEFORE any stop so that the _on_disconnected guard
+            # will suppress the TCP-close event the server sends after a failed auth.
+            # Without this, the server-side close fires _on_disconnected with the
+            # current client, bypasses the guard, emits another ConnectionDropped,
+            # and schedules a duplicate reconnect attempt.
+            self._stop_current_client()
             return False
 
         if not self.authenticated:
@@ -423,6 +452,7 @@ class CTraderBroker(BaseBroker):
             logger.error("  - Invalid CTRADER_CLIENT_ID or CTRADER_CLIENT_SECRET")
             logger.error("  - Invalid or expired access token (auto-refresh may have failed)")
             logger.error("  - No trading accounts linked to this access token")
+            self._stop_current_client()
             return False
 
         return True
@@ -1260,6 +1290,12 @@ class CTraderBroker(BaseBroker):
         if self._reconnect_attempts > self._max_reconnect_attempts:
             logger.error(f"[CONNECTION] ❌ Max reconnect attempts ({self._max_reconnect_attempts}) reached!")
             logger.error(f"[CONNECTION] ❌ CRITICAL: Trading system is OFFLINE - manual intervention required!")
+            # Stop the connection monitor: without this it fires every 30 s,
+            # schedules _attempt_reconnect, which immediately re-emits
+            # ReconnectExhausted (counter still > max), flooding the proxy.
+            if self._connection_monitor_task and not self._connection_monitor_task.done():
+                self._connection_monitor_task.cancel()
+                self._connection_monitor_task = None
             from live_trading.notifications.connection_events import ReconnectExhausted
             self._event_bus.emit(ReconnectExhausted(attempts=self._max_reconnect_attempts))
             self._reconnecting = False
@@ -1363,8 +1399,11 @@ class CTraderBroker(BaseBroker):
             CHECK_INTERVAL = 30  # seconds between checks
             STATUS_LOG_INTERVAL = 300  # Log subscription details every 5 minutes
             TOKEN_CHECK_INTERVAL = 3600  # check token expiry every hour
+            HEARTBEAT_INTERVAL = 14400  # send Telegram heartbeat every 4 hours
             last_status_log = datetime.utcnow()
             last_token_check = datetime.utcnow()
+            last_heartbeat = datetime.utcnow()
+            connection_started = datetime.utcnow()
 
             while not self._shutdown_requested:
                 try:
@@ -1428,6 +1467,14 @@ class CTraderBroker(BaseBroker):
                             logger.warning(f"[CONNECTION] ⚠️ Connection may be stale ({seconds_since_message:.0f}s since last message)")
                             from live_trading.notifications.connection_events import ConnectionStale
                             self._event_bus.emit(ConnectionStale(seconds_since_last_message=seconds_since_message))
+                        else:
+                            # Connection is healthy — emit periodic heartbeat
+                            secs_since_hb = (datetime.utcnow() - last_heartbeat).total_seconds()
+                            if secs_since_hb >= HEARTBEAT_INTERVAL:
+                                last_heartbeat = datetime.utcnow()
+                                uptime_hours = (datetime.utcnow() - connection_started).total_seconds() / 3600
+                                from live_trading.notifications.connection_events import SystemHeartbeat
+                                self._event_bus.emit(SystemHeartbeat(uptime_hours=uptime_hours))
                     else:
                         logger.warning("[CONNECTION] ⚠️ No messages received yet after connection")
 

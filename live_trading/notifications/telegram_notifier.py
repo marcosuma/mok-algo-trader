@@ -10,7 +10,7 @@ import requests
 from live_trading.notifications.connection_events import (
     AuthFailed, ConnectionDropped, ConnectionRestored, ConnectionStale,
     FullRestartAttempt, FullRestartFailed, ReconnectAttempt, ReconnectExhausted,
-    SystemStarted, SystemStopped, TokenRefreshFailed,
+    SystemHeartbeat, SystemStarted, SystemStopped, TokenRefreshFailed,
 )
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ _DEGRADED_TYPES = (
     FullRestartAttempt, FullRestartFailed, AuthFailed, TokenRefreshFailed, SystemStopped,
 )
 # Events that indicate recovery (✅)
-_RECOVERY_TYPES = (ConnectionRestored, SystemStarted)
+_RECOVERY_TYPES = (ConnectionRestored, SystemStarted, SystemHeartbeat)
 # Events that indicate a warning (🟡)
 _WARNING_TYPES = (ConnectionStale,)
 # Events that must be sent immediately without waiting for the batch window
@@ -69,6 +69,13 @@ def _format_event(event) -> str:
         return f"Authentication failed: {event.reason}"
     if isinstance(event, TokenRefreshFailed):
         return f"Token refresh failed: {event.reason} — manual regeneration may be required"
+    if isinstance(event, SystemHeartbeat):
+        uptime = event.uptime_hours
+        if uptime < 1:
+            uptime_str = f"{int(uptime * 60)}m"
+        else:
+            uptime_str = f"{uptime:.1f}h"
+        return f"Connection healthy — uptime {uptime_str}"
     return str(event)
 
 

@@ -74,3 +74,11 @@ class AuthFailed:
 class TokenRefreshFailed:
     reason: str
     timestamp: datetime = field(default_factory=_now)
+
+
+@dataclass
+class SystemHeartbeat:
+    """Emitted periodically when the connection is healthy — lets operators
+    verify the system is alive without waiting for an error event."""
+    uptime_hours: float
+    timestamp: datetime = field(default_factory=_now)

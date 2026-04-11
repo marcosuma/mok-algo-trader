@@ -323,13 +323,19 @@ class CTraderBrokerProxy:
         self._restarting = True
         try:
             self._restart_count += 1
-            attempt = 0
             self.event_bus.emit(FullRestartAttempt(restart_count=self._restart_count))
             logger.critical(
                 f"[Proxy] All fast reconnects exhausted — performing full subprocess restart "
-                f"(#{self._restart_count}).  Waiting {self._restart_delay}s before first attempt..."
+                f"(#{self._restart_count}).  Killing old subprocess immediately, then waiting "
+                f"{self._restart_delay}s before spawning a fresh one..."
             )
 
+            # Kill the old subprocess NOW so it stops generating events during the wait.
+            await self._stop_reader()
+            self._kill_subprocess()
+            self._clear_pending_futures(RuntimeError("Subprocess restarted"))
+
+            attempt = 0
             while not self._shutdown:
                 attempt += 1
                 await asyncio.sleep(self._restart_delay)
@@ -338,17 +344,12 @@ class CTraderBrokerProxy:
 
                 logger.info(f"[Proxy] Full restart #{self._restart_count} attempt {attempt}...")
                 try:
-                    # Stop old reader so it doesn't consume the new event_queue.
-                    await self._stop_reader()
-                    self._kill_subprocess()
-                    self._clear_pending_futures(RuntimeError("Subprocess restarted"))
-
                     # Fresh subprocess + reader.
                     self._spawn_subprocess()
                     self._start_reader()
 
-                    # Re-connect.
-                    ok = await self._send_cmd("connect")
+                    # Re-connect (120 s matches proxy.connect() timeout).
+                    ok = await self._send_cmd("connect", timeout=120.0)
                     if not ok:
                         raise RuntimeError("connect() returned False after restart")
                     await self._send_cmd("start_connection_monitor")
@@ -369,6 +370,10 @@ class CTraderBrokerProxy:
                     self.event_bus.emit(
                         FullRestartFailed(restart_count=self._restart_count, attempt=attempt)
                     )
+                    # Kill the subprocess that was spawned for this failed attempt
+                    # so we start clean on the next try.
+                    await self._stop_reader()
+                    self._kill_subprocess()
         finally:
             self._restarting = False
 

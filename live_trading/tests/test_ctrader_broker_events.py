@@ -29,6 +29,7 @@ def _make_broker(bus):
     broker._trendbar_subscriptions = {}
     broker._live_trendbar_volumes = {}
     broker._last_message_time = None
+    broker._connection_monitor_task = None
     return broker
 
 
